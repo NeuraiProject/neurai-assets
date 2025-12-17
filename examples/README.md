@@ -1,0 +1,319 @@
+# NeuraiAssets Examples
+
+This directory contains comprehensive examples demonstrating all features of the `@neuraiproject/neurai-assets` library.
+
+## Overview
+
+Each example is a standalone JavaScript file that demonstrates specific functionality. All examples include detailed comments explaining the code and the operations being performed.
+
+## Examples List
+
+### 1. Create ROOT Asset
+**File:** [01-create-root-asset.js](01-create-root-asset.js)
+
+Learn how to create a standard ROOT asset (token). This is the base asset type in Neurai.
+
+- Cost: 1000 XNA
+- Creates: `MYTOKEN` + `MYTOKEN!` (owner token)
+- Features: Supply, decimals, reissuability, IPFS metadata
+
+**Topics covered:**
+- Initializing NeuraiAssets
+- Creating a ROOT asset
+- Understanding owner tokens
+- Error handling
+
+---
+
+### 2. Create SUB Asset
+**File:** [02-create-sub-asset.js](02-create-sub-asset.js)
+
+Learn how to create SUB assets (child tokens of a ROOT asset).
+
+- Format: `PARENT/SUB`
+- Cost: 200 XNA
+- Requires: Parent's owner token (`PARENT!`)
+
+**Topics covered:**
+- Creating SUB assets
+- Verifying owner token ownership
+- Returning owner tokens safely
+
+---
+
+### 3. Create UNIQUE Assets (NFTs)
+**File:** [03-create-nfts.js](03-create-nfts.js)
+
+Learn how to create UNIQUE assets (NFTs) on Neurai blockchain.
+
+- Format: `ROOT#TAG`
+- Cost: 10 XNA per NFT
+- Features: Batch creation, individual IPFS metadata
+
+**Topics covered:**
+- Creating NFT collections
+- Single NFT creation
+- IPFS metadata for each NFT
+- NFT properties (non-divisible, fixed quantity of 1)
+
+---
+
+### 4. Reissue Assets
+**File:** [04-reissue-asset.js](04-reissue-asset.js)
+
+Learn how to reissue (mint more supply) of existing assets.
+
+- Cost: 200 XNA
+- Requires: Asset's owner token
+- Features: Mint more, lock supply, update metadata
+
+**Topics covered:**
+- Minting additional supply
+- Locking supply permanently
+- Updating IPFS metadata
+- Checking reissuability status
+
+---
+
+### 5. Create QUALIFIERs and Tag Addresses
+**File:** [05-create-qualifier-and-tag.js](05-create-qualifier-and-tag.js)
+
+Learn how to create QUALIFIER assets (KYC/compliance tags) and assign them to addresses.
+
+- Format: `#NAME`
+- Create cost: 2000 XNA (root), 200 XNA (sub)
+- Tag cost: 0.1 XNA per address
+
+**Topics covered:**
+- Creating QUALIFIER assets
+- Tagging addresses with qualifiers
+- Untagging addresses
+- Creating compliance systems
+- SUB_QUALIFIERs
+
+---
+
+### 6. Create RESTRICTED Assets
+**File:** [06-create-restricted-asset.js](06-create-restricted-asset.js)
+
+Learn how to create RESTRICTED assets (security tokens with compliance).
+
+- Format: `$NAME`
+- Cost: 3000 XNA
+- Features: Verifier strings, compliance rules
+
+**Topics covered:**
+- Creating RESTRICTED assets
+- Verifier string syntax (boolean logic)
+- Complex verifier logic (AND, OR, parentheses)
+- Validating verifier strings
+- Checking address compliance
+
+---
+
+### 7. Freeze and Unfreeze Operations
+**File:** [07-freeze-and-unfreeze.js](07-freeze-and-unfreeze.js)
+
+Learn how to freeze/unfreeze addresses and assets (RESTRICTED assets only).
+
+- Cost: 0 XNA (only network fee)
+- Requires: Restricted asset's owner token
+
+**Topics covered:**
+- Freezing specific addresses
+- Unfreezing addresses
+- Global asset freeze
+- Global asset unfreeze
+- Complete freeze workflow
+
+---
+
+### 8. Query Asset Information
+**File:** [08-query-assets.js](08-query-assets.js)
+
+Learn how to query asset information from the blockchain.
+
+- All queries are read-only (no transactions)
+- No costs involved
+
+**Topics covered:**
+- Querying asset metadata
+- Listing all assets
+- Listing wallet assets
+- Querying asset holders
+- Querying address balances
+- Checking asset existence
+- Detecting asset types
+- Pagination
+
+---
+
+### 9. Complete Wallet Integration
+**File:** [09-wallet-integration.js](09-wallet-integration.js)
+
+Learn complete integration with `@neuraiproject/neurai-jswallet`.
+
+**Topics covered:**
+- Initializing wallet and assets together
+- Complete transaction workflow
+- Signing and broadcasting
+- Creating multiple assets in sequence
+- Error handling strategies
+- Dynamic configuration updates
+
+---
+
+## Running the Examples
+
+### Prerequisites
+
+```bash
+npm install @neuraiproject/neurai-assets
+# npm install @neuraiproject/neurai-jswallet  # For wallet integration
+```
+
+### Running an Example
+
+Each example is self-contained and can be run directly:
+
+```bash
+node 01-create-root-asset.js
+```
+
+### Important Notes
+
+1. **Mock RPC**: All examples use mock RPC functions. Replace with your actual RPC client in production.
+
+2. **Network**: Examples use mainnet (`'xna'`). Change to `'xna-test'` for testnet.
+
+3. **Addresses**: Replace placeholder addresses with your actual wallet addresses.
+
+4. **Testing**: Test on testnet first before using mainnet.
+
+## Production Integration
+
+For production use, integrate with `neurai-jswallet`:
+
+```javascript
+const NeuraiWallet = require('@neuraiproject/neurai-jswallet');
+const NeuraiAssets = require('@neuraiproject/neurai-assets');
+
+// Initialize wallet
+const wallet = new NeuraiWallet(mnemonic, {
+  network: 'xna',
+  rpcUrl: 'http://localhost:9766',
+  rpcUser: 'user',
+  rpcPassword: 'pass'
+});
+
+// Initialize assets
+const assets = new NeuraiAssets(wallet.rpc.bind(wallet), {
+  network: 'xna',
+  addresses: wallet.getAllAddresses(),
+  changeAddress: wallet.getChangeAddress(),
+  toAddress: wallet.getReceivingAddress()
+});
+
+// Create asset
+const result = await assets.createRootAsset({...});
+
+// Sign and broadcast
+const signedTx = await wallet.signTransaction(result.rawTx);
+const txid = await wallet.broadcastTransaction(signedTx);
+```
+
+## Asset Type Reference
+
+| Type | Format | Cost | Example |
+|------|--------|------|---------|
+| ROOT | `NAME` | 1000 XNA | `MYTOKEN` |
+| SUB | `ROOT/SUB` | 200 XNA | `MYTOKEN/PREMIUM` |
+| UNIQUE | `ROOT#TAG` | 10 XNA | `MYTOKEN#001` |
+| QUALIFIER | `#NAME` | 2000 XNA | `#KYC_VERIFIED` |
+| SUB_QUALIFIER | `#ROOT/#SUB` | 200 XNA | `#KYC/#LEVEL2` |
+| RESTRICTED | `$NAME` | 3000 XNA | `$SECURITY` |
+| OWNER | `NAME!` | N/A | `MYTOKEN!` |
+
+## Common Patterns
+
+### Pattern 1: Create Asset Ecosystem
+
+```javascript
+// 1. Create ROOT asset
+const root = await assets.createRootAsset({...});
+
+// 2. Create SUB assets
+const sub = await assets.createSubAsset({...});
+
+// 3. Create NFT collection
+const nfts = await assets.createUniqueAssets({...});
+```
+
+### Pattern 2: Security Token Workflow
+
+```javascript
+// 1. Create qualifiers
+const kyc = await assets.createQualifier({ qualifierName: '#KYC' });
+const accredited = await assets.createQualifier({ qualifierName: '#ACCREDITED' });
+
+// 2. Create restricted asset
+const security = await assets.createRestrictedAsset({
+  assetName: '$SECURITY',
+  verifierString: '#KYC & #ACCREDITED'
+});
+
+// 3. Tag compliant addresses
+await assets.tagAddresses({
+  qualifierName: '#KYC',
+  addresses: [...]
+});
+
+// 4. Freeze non-compliant addresses if needed
+await assets.freezeAddresses({
+  assetName: '$SECURITY',
+  addresses: [...]
+});
+```
+
+### Pattern 3: Query Before Action
+
+```javascript
+// Always check before creating
+const exists = await assets.assetExists('MYTOKEN');
+if (exists) {
+  console.log('Asset already exists!');
+  return;
+}
+
+// Check owner token before reissuing
+const myAssets = await assets.listMyAssets('MYTOKEN!');
+if (!myAssets['MYTOKEN!']) {
+  console.log('You need the owner token!');
+  return;
+}
+
+// Proceed with operation
+const result = await assets.createRootAsset({...});
+```
+
+## Error Handling
+
+All examples include error handling. Common errors:
+
+- `AssetExistsError` - Asset name already taken
+- `AssetNotFoundError` - Asset doesn't exist
+- `InsufficientFundsError` - Not enough XNA
+- `OwnerTokenNotFoundError` - Missing required owner token
+- `OwnerTokenNotReturnedError` - CRITICAL: Owner token lost
+- `InvalidAssetNameError` - Invalid name format
+- `MaxSupplyExceededError` - Exceeds 21 billion limit
+
+## Support
+
+For questions or issues:
+- Documentation: [README.md](../README.md)
+- Issues: https://github.com/neuraiproject/neurai-jswallet/issues
+
+## License
+
+MIT

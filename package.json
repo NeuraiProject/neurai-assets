@@ -1,0 +1,39 @@
+{
+  "name": "@neuraiproject/neurai-assets",
+  "version": "1.0.0",
+  "description": "Non-custodial Neurai asset management library for JavaScript",
+  "main": "./src/index.js",
+  "scripts": {
+    "test": "mocha ./tests/unit/**/*.test.js ./tests/integration/**/*.test.js",
+    "test:unit": "mocha ./tests/unit/**/*.test.js",
+    "test:integration": "mocha ./tests/integration/**/*.test.js",
+    "test:watch": "mocha --watch ./tests/**/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neuraiproject/neurai-assets.git"
+  },
+  "keywords": [
+    "neurai",
+    "assets",
+    "tokens",
+    "nft",
+    "blockchain",
+    "cryptocurrency",
+    "non-custodial",
+    "xna"
+  ],
+  "author": "Neurai Project",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "chai": "^4.3.10",
+    "mocha": "^10.2.0"
+  },
+  "peerDependencies": {
+    "@neuraiproject/neurai-rpc": "^0.4.6"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
