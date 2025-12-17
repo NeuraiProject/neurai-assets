@@ -25,6 +25,10 @@
   ],
   "author": "Neurai Project",
   "license": "MIT",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {},
   "devDependencies": {
     "chai": "^4.3.10",
