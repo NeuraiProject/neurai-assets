@@ -17,59 +17,46 @@ const { AssetNameParser } = require('../utils');
 class OutputOrderer {
   /**
    * Order outputs according to protocol requirements
-   * @param {object} outputs - Unordered outputs object
-   * @returns {object} Ordered outputs object
+   * @param {object|Array} outputs - Unordered outputs object or array of single-key objects
+   * @returns {Array} Ordered array of single-key output objects
    */
   order(outputs) {
-    if (!outputs || typeof outputs !== 'object') {
-      throw new Error('Outputs must be an object');
+    // Normalize to array of {address, value} pairs
+    let pairs;
+    if (Array.isArray(outputs)) {
+      pairs = outputs.map(obj => {
+        const [address, value] = Object.entries(obj)[0];
+        return { address, value };
+      });
+    } else if (outputs && typeof outputs === 'object') {
+      pairs = Object.entries(outputs).map(([address, value]) => ({ address, value }));
+    } else {
+      throw new Error('Outputs must be an object or array');
     }
 
-    // Categorize outputs
-    const xnaOutputs = [];       // XNA amounts (burn + change)
-    const ownerOutputs = [];     // Owner token transfers
-    const assetOutputs = [];     // Asset operations and transfers
+    // Categorize
+    const xnaOutputs = [];
+    const ownerOutputs = [];
+    const assetOutputs = [];
 
-    for (const [address, value] of Object.entries(outputs)) {
+    for (const { address, value } of pairs) {
       if (typeof value === 'number') {
-        // XNA output (numeric value)
-        xnaOutputs.push({ address, value, order: 1 });
+        xnaOutputs.push({ address, value });
       } else if (typeof value === 'object') {
-        // Complex output (transfer or operation)
-        if (value.transfer) {
-          // Check if it's an owner token transfer
-          if (this.isOwnerTokenTransfer(value.transfer)) {
-            ownerOutputs.push({ address, value, order: 2 });
-          } else {
-            // Regular asset transfer
-            assetOutputs.push({ address, value, order: 3 });
-          }
+        if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
+          ownerOutputs.push({ address, value });
         } else {
-          // Asset operation (issue, reissue, etc.)
-          assetOutputs.push({ address, value, order: 3 });
+          assetOutputs.push({ address, value });
         }
       }
     }
 
-    // Build ordered output object
-    const orderedOutputs = {};
-
-    // 1. Add XNA outputs first
-    xnaOutputs.forEach(({ address, value }) => {
-      orderedOutputs[address] = value;
-    });
-
-    // 2. Add owner token outputs second
-    ownerOutputs.forEach(({ address, value }) => {
-      orderedOutputs[address] = value;
-    });
-
-    // 3. Add asset operations/transfers last
-    assetOutputs.forEach(({ address, value }) => {
-      orderedOutputs[address] = value;
-    });
-
-    return orderedOutputs;
+    // Return ordered array of single-key objects
+    return [
+      ...xnaOutputs.map(({ address, value }) => ({ [address]: value })),
+      ...ownerOutputs.map(({ address, value }) => ({ [address]: value })),
+      ...assetOutputs.map(({ address, value }) => ({ [address]: value })),
+    ];
   }
 
   /**
@@ -97,7 +84,9 @@ class OutputOrderer {
    * @throws {Error} If ordering is invalid
    */
   validateOrdering(outputs) {
-    const entries = Object.entries(outputs);
+    const entries = Array.isArray(outputs)
+      ? outputs.map(obj => Object.entries(obj)[0])
+      : Object.entries(outputs);
     let currentCategory = 0; // 0 = not started, 1 = XNA, 2 = owner, 3 = assets
 
     for (const [address, value] of entries) {
@@ -175,8 +164,11 @@ class OutputOrderer {
    */
   debugOrdering(outputs) {
     const debug = [];
+    const entries = Array.isArray(outputs)
+      ? outputs.map(obj => Object.entries(obj)[0])
+      : Object.entries(outputs);
 
-    for (const [address, value] of Object.entries(outputs)) {
+    for (const [address, value] of entries) {
       const category = this.getOutputCategory(value);
       let order;
 

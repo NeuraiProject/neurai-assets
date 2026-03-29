@@ -136,14 +136,14 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
     }));
 
     // 13. Build outputs (ORDER CRITICAL!)
-    const outputs = {};
+    const outputs = [];
 
     // First: Burn output
-    outputs[burnInfo.address] = burnInfo.amount;
+    outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
     if (xnaChange > 0.00000001) {
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Last: Issue restricted operation
@@ -157,7 +157,7 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
       ipfs_hash: ipfsHash
     });
 
-    outputs[toAddress] = issueRestrictedOutput;
+    outputs.push({ [toAddress]: issueRestrictedOutput });
 
     // 14. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);

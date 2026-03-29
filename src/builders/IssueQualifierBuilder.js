@@ -184,14 +184,14 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     }
 
     // 14. Build outputs (ORDER CRITICAL!)
-    const outputs = {};
+    const outputs = [];
 
     // First: Burn output
-    outputs[burnInfo.address] = burnInfo.amount;
+    outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
     if (xnaChange > 0.00000001) {
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Third: Owner token return (if sub-qualifier)
@@ -200,7 +200,7 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
         ownerTokenName,
         changeAddress
       );
-      Object.assign(outputs, ownerTokenReturn);
+      outputs.push(ownerTokenReturn);
     }
 
     // Last: Issue qualifier operation
@@ -211,7 +211,7 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
       ipfs_hash: ipfsHash
     });
 
-    outputs[toAddress] = issueQualifierOutput;
+    outputs.push({ [toAddress]: issueQualifierOutput });
 
     // 15. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);

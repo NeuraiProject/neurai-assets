@@ -24,9 +24,27 @@ class BaseAssetTransactionBuilder {
    * @param {string[]|Function} addresses - Wallet addresses or function that returns addresses
    * @param {object} params - Transaction parameters
    */
-  constructor(rpc, network, addresses, params) {
+  constructor(rpc, networkOrParams, addresses, params) {
     if (!rpc || typeof rpc !== 'function') {
       throw new Error('RPC function is required');
+    }
+
+    // Support both (rpc, network, addresses, params) and (rpc, params) calling forms.
+    // NeuraiAssets passes a single merged params object as the second argument.
+    let network, actualAddresses, actualParams;
+    if (
+      typeof networkOrParams === 'object' &&
+      networkOrParams !== null &&
+      !Array.isArray(networkOrParams) &&
+      addresses === undefined
+    ) {
+      network = networkOrParams.network;
+      actualAddresses = networkOrParams.addresses;
+      actualParams = networkOrParams;
+    } else {
+      network = networkOrParams;
+      actualAddresses = addresses;
+      actualParams = params;
     }
 
     if (!network) {
@@ -34,17 +52,17 @@ class BaseAssetTransactionBuilder {
     }
 
     // Addresses can be an array or a function that returns addresses
-    if (typeof addresses === 'function') {
-      this.getAddresses = addresses;
-    } else if (Array.isArray(addresses)) {
-      this.getAddresses = () => addresses;
+    if (typeof actualAddresses === 'function') {
+      this.getAddresses = actualAddresses;
+    } else if (Array.isArray(actualAddresses)) {
+      this.getAddresses = () => actualAddresses;
     } else {
       throw new Error('Addresses must be an array or a function');
     }
 
     this.rpc = rpc;
     this.network = network;
-    this.params = params || {};
+    this.params = actualParams || {};
 
     // Initialize managers
     this.burnManager = new BurnManager(network);

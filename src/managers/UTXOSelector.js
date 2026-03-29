@@ -33,11 +33,9 @@ class UTXOSelector {
     }
 
     try {
-      const params = assetName
-        ? [{ addresses, assetName }]
-        : [{ addresses }];
-
-      const utxos = await this.rpc('getaddressutxos', params);
+      // assetName goes inside the params object; omit it for XNA UTXOs
+      const queryParams = assetName ? { addresses, assetName } : { addresses };
+      const utxos = await this.rpc('getaddressutxos', [queryParams]);
 
       // Filter for specific asset or XNA
       if (assetName) {

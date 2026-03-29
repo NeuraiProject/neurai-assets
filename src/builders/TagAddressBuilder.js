@@ -162,14 +162,14 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     });
 
     // 13. Build outputs (ORDER CRITICAL!)
-    const outputs = {};
+    const outputs = [];
 
     // First: Burn output
-    outputs[burnInfo.address] = burnInfo.amount;
+    outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
     if (xnaChange > 0.00000001) {
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Third: Owner token return (CRITICAL - must return or lost forever!)
@@ -177,7 +177,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       ownerTokenName,
       changeAddress
     );
-    Object.assign(outputs, ownerTokenReturn);
+    outputs.push(ownerTokenReturn);
 
     // Last: Tag/Untag operation
     // Note: Using first address as transaction output address (protocol requirement)
@@ -192,7 +192,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
           asset_data: assetData
         });
 
-    outputs[targetAddresses[0]] = operationOutput;
+    outputs.push({ [targetAddresses[0]]: operationOutput });
 
     // 14. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);

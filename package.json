@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-assets",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Non-custodial Neurai asset management library for JavaScript",
   "main": "./src/index.js",
   "scripts": {

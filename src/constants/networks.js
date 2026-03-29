@@ -7,16 +7,16 @@ const NETWORKS = {
     name: 'xna',
     displayName: 'Neurai Mainnet',
     addressPrefix: 'N',
-    assetNameMaxLength: 31,
-    defaultRPCPort: 8766,
+    assetNameMaxLength: 32,
+    defaultRPCPort: 19001,
     coin: 'XNA'
   },
   TESTNET: {
     name: 'xna-test',
     displayName: 'Neurai Testnet',
     addressPrefix: 'm',
-    assetNameMaxLength: 31,  // Same as mainnet
-    defaultRPCPort: 18766,
+    assetNameMaxLength: 32,  // Same as mainnet
+    defaultRPCPort: 19101,
     coin: 'TXNA'
   }
 };

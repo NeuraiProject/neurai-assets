@@ -181,14 +181,14 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     });
 
     // 15. Build outputs (ORDER CRITICAL!)
-    const outputs = {};
+    const outputs = [];
 
     // First: Burn output
-    outputs[burnInfo.address] = burnInfo.amount;
+    outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
     if (xnaChange > 0.00000001) {
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Third: Owner token return (CRITICAL - must return or lost forever!)
@@ -198,7 +198,7 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
       ownerTokenName,
       ownerReturnAddress
     );
-    Object.assign(outputs, ownerTokenReturn);
+    outputs.push(ownerTokenReturn);
 
     // Last: Reissue operation
     const units = assetData.units || 0;
@@ -209,7 +209,7 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
       new_ipfs: newIpfs || undefined
     });
 
-    outputs[toAddress] = reissueOutput;
+    outputs.push({ [toAddress]: reissueOutput });
 
     // 16. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);

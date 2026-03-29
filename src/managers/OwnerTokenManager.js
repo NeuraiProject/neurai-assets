@@ -46,8 +46,8 @@ class OwnerTokenManager {
     }
 
     try {
-      // Query UTXOs for the owner token
-      const utxos = await this.rpc('getaddressutxos', [{ addresses }]);
+      // Request UTXOs for the specific owner token via assetName param
+      const utxos = await this.rpc('getaddressutxos', [{ addresses, assetName: ownerTokenName }]);
 
       // Filter for the specific owner token
       const ownerTokenUTXOs = utxos.filter(utxo => utxo.assetName === ownerTokenName);
@@ -133,12 +133,16 @@ class OwnerTokenManager {
     }
 
     // Check each owner token is in outputs
+    const outputEntries = Array.isArray(outputs)
+      ? outputs.map(obj => Object.entries(obj)[0])
+      : Object.entries(outputs);
+
     for (const ownerInput of ownerTokenInputs) {
       const ownerTokenName = ownerInput.assetName;
       let foundInOutputs = false;
 
       // Check all outputs for owner token
-      for (const [address, output] of Object.entries(outputs)) {
+      for (const [address, output] of outputEntries) {
         // Check if output has transfer field
         if (output && typeof output === 'object' && output.transfer) {
           // Check if owner token is in the transfer
@@ -192,7 +196,8 @@ class OwnerTokenManager {
     }
 
     try {
-      const utxos = await this.rpc('getaddressutxos', [{ addresses }]);
+      // Request all asset UTXOs with assetName='*'
+      const utxos = await this.rpc('getaddressutxos', [{ addresses, assetName: '*' }]);
 
       // Filter for owner tokens (asset names ending with !)
       const ownerTokenUTXOs = utxos.filter(utxo => {

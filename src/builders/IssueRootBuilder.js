@@ -124,15 +124,15 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
     }));
 
     // 12. Build outputs (ORDER MATTERS!)
-    const outputs = {};
+    const outputs = [];
 
     // First: Burn output
-    outputs[burnInfo.address] = burnInfo.amount;
+    outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
     if (xnaChange > 0.00000001) {
       // Only add change if meaningful amount
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Last: Issue operation
@@ -145,7 +145,7 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
       ipfs_hash: ipfsHash
     });
 
-    outputs[toAddress] = issueOutput;
+    outputs.push({ [toAddress]: issueOutput });
 
     // 13. Order outputs (critical for protocol)
     const orderedOutputs = this.outputOrderer.order(outputs);

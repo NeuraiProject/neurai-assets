@@ -192,14 +192,14 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     });
 
     // 14. Build outputs (ORDER CRITICAL!)
-    const outputs = {};
+    const outputs = [];
 
     // First: Burn output
-    outputs[burnInfo.address] = burnInfo.amount;
+    outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
     if (xnaChange > 0.00000001) {
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Third: Owner token return (CRITICAL - must return or lost forever!)
@@ -207,7 +207,7 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
       ownerTokenName,
       changeAddress
     );
-    Object.assign(outputs, ownerTokenReturn);
+    outputs.push(ownerTokenReturn);
 
     // Last: Issue unique operation
     const issueUniqueOutput = OutputFormatter.formatIssueUniqueOutput({
@@ -216,7 +216,7 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
       ipfs_hashes: ipfsHashes.length > 0 ? ipfsHashes : undefined
     });
 
-    outputs[toAddress] = issueUniqueOutput;
+    outputs.push({ [toAddress]: issueUniqueOutput });
 
     // 15. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);

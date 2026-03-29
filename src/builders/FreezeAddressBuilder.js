@@ -155,11 +155,11 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     });
 
     // 12. Build outputs (ORDER CRITICAL!)
-    const outputs = {};
+    const outputs = [];
 
     // First: XNA change (if any)
     if (xnaChange > 0.00000001) {
-      outputs[changeAddress] = parseFloat(xnaChange.toFixed(8));
+      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
     // Second: Owner token return (CRITICAL - must return or lost forever!)
@@ -167,7 +167,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
       ownerTokenName,
       changeAddress
     );
-    Object.assign(outputs, ownerTokenReturn);
+    outputs.push(ownerTokenReturn);
 
     // Last: Freeze/Unfreeze operation
     let operationOutput;
@@ -180,7 +180,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
           asset_name: assetName,
           addresses: targetAddresses
         });
-        outputs[targetAddresses[0]] = operationOutput;
+        outputs.push({ [targetAddresses[0]]: operationOutput });
         break;
 
       case 'UNFREEZE_ADDRESSES':
@@ -189,17 +189,17 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
           asset_name: assetName,
           addresses: targetAddresses
         });
-        outputs[targetAddresses[0]] = operationOutput;
+        outputs.push({ [targetAddresses[0]]: operationOutput });
         break;
 
       case 'FREEZE_ASSET':
         operationOutput = OutputFormatter.formatFreezeAssetOutput(assetName);
-        outputs[changeAddress] = operationOutput;
+        outputs.push({ [changeAddress]: operationOutput });
         break;
 
       case 'UNFREEZE_ASSET':
         operationOutput = OutputFormatter.formatUnfreezeAssetOutput(assetName);
-        outputs[changeAddress] = operationOutput;
+        outputs.push({ [changeAddress]: operationOutput });
         break;
 
       default:
