@@ -128,7 +128,8 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
 
     // 8. Estimate fee
     // Inputs: XNA UTXOs + owner token UTXO
-    // Outputs: burn + change + owner token return + reissue operation
+    // Outputs: burn + change + reissue operation
+    // (node auto-generates owner token return from the reissue entry, total = 4 physical outputs)
     const estimatedFee = await this.estimateFee(2, 4);
 
     // 9. Calculate total XNA needed
@@ -191,16 +192,9 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
-    // Third: Owner token return (CRITICAL - must return or lost forever!)
-    // Support optional ownerChangeAddress for transferring ownership
-    const ownerReturnAddress = this.params.ownerChangeAddress || changeAddress;
-    const ownerTokenReturn = this.ownerTokenManager.createOwnerTokenReturnOutput(
-      ownerTokenName,
-      ownerReturnAddress
-    );
-    outputs.push(ownerTokenReturn);
-
     // Last: Reissue operation
+    // Note: the node auto-generates the owner token return as part of processing
+    // the reissue entry — no explicit transfer output needed here.
     const units = assetData.units || 0;
     const reissueOutput = OutputFormatter.formatReissueOutput({
       asset_name: assetName,
@@ -214,13 +208,10 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     // 16. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 17. Validate owner token is returned (safety check)
-    this.ownerTokenManager.validateOwnerTokenReturn(inputs, orderedOutputs);
-
-    // 18. Create raw transaction
+    // 17. Create raw transaction
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 19. Format and return result
+    // 18. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
 
     return this.formatResult(
