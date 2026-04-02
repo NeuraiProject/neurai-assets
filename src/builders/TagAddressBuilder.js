@@ -6,13 +6,13 @@
  * - Assign qualifier tags to addresses (for restricted asset compliance)
  * - Remove qualifier tags from addresses
  * - Cost: 0.1 XNA per address (burned)
- * - Requires qualifier's owner token (#QUALIFIER!)
+ * - Requires spending the qualifier asset itself (#QUALIFIER)
  * - Used to mark addresses as KYC'd, accredited, etc.
  * - Owner token must be returned
  */
 
 const BaseAssetTransactionBuilder = require('./BaseAssetTransactionBuilder');
-const { OutputFormatter, AssetNameParser } = require('../utils');
+const { OutputFormatter } = require('../utils');
 const { AssetNotFoundError, OwnerTokenNotFoundError, InvalidAddressError } = require('../errors');
 
 class TagAddressBuilder extends BaseAssetTransactionBuilder {
@@ -32,6 +32,10 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       throw new Error('addresses is required and must be a non-empty array');
     }
 
+    if (params.addresses.length > 10) {
+      throw new Error('addresses array cannot exceed 10 entries per transaction (node limit)');
+    }
+
     // Validate qualifier name
     this.validateAssetName(params.qualifierName, 'QUALIFIER');
 
@@ -44,14 +48,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
         );
       }
 
-      // Basic address validation (starts with N or m/n depending on network)
-      const validPrefixes = this.network === 'xna' ? ['N'] : ['m', 'n'];
-      if (!validPrefixes.some(prefix => address.startsWith(prefix))) {
-        throw new InvalidAddressError(
-          `addresses[${index}] has invalid prefix for network ${this.network}`,
-          address
-        );
-      }
+      // Address prefix validation is left to the node (varies by network)
     });
 
     return true;
@@ -69,7 +66,6 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     const {
       qualifierName,
       addresses: targetAddresses,
-      assetData = ''
     } = this.params;
 
     // 2. Check if qualifier exists
@@ -85,19 +81,18 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     const addresses = await this._getAddresses();
     const changeAddress = await this.getChangeAddress();
 
-    // 4. Find qualifier's owner token (CRITICAL: must have this)
-    const ownerTokenName = AssetNameParser.getOwnerTokenName(qualifierName);
-    let ownerTokenUTXO;
+    // 4. Find qualifier asset balance (CRITICAL: must have this)
+    let qualifierUTXOs;
+    let qualifierQuantity;
     try {
-      ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
-        ownerTokenName,
-        addresses
-      );
+      const selection = await this.utxoSelector.selectAssetUTXOs(addresses, qualifierName, 1);
+      qualifierUTXOs = selection.utxos;
+      qualifierQuantity = selection.totalAmount;
     } catch (error) {
-      if (error instanceof OwnerTokenNotFoundError) {
+      if (error.name === 'InsufficientFundsError') {
         throw new OwnerTokenNotFoundError(
-          `You must own the qualifier's owner token (${ownerTokenName}) to tag/untag addresses.`,
-          ownerTokenName
+          `You must own the qualifier asset (${qualifierName}) to tag/untag addresses.`,
+          qualifierName
         );
       }
       throw error;
@@ -121,7 +116,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     const totalXNAInput = utxoSelection.totalXNA;
 
     // 9. Recalculate fee with actual input count
-    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
+    const actualInputCount = baseCurrencyUTXOs.length + qualifierUTXOs.length;
     const actualFee = await this.estimateFee(actualInputCount, 3);
 
     // 10. Verify we have enough XNA
@@ -139,7 +134,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     );
     const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
 
-    // 12. Build inputs (XNA + owner token)
+    // 12. Build inputs (XNA + qualifier asset)
     const inputs = [];
 
     // Add XNA inputs
@@ -152,13 +147,14 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       });
     });
 
-    // Add owner token input
-    inputs.push({
-      txid: ownerTokenUTXO.txid,
-      vout: ownerTokenUTXO.outputIndex,
-      address: ownerTokenUTXO.address,
-      assetName: ownerTokenUTXO.assetName,
-      satoshis: ownerTokenUTXO.satoshis
+    qualifierUTXOs.forEach(utxo => {
+      inputs.push({
+        txid: utxo.txid,
+        vout: utxo.outputIndex,
+        address: utxo.address,
+        assetName: utxo.assetName,
+        satoshis: utxo.satoshis
+      });
     });
 
     // 13. Build outputs (ORDER CRITICAL!)
@@ -172,39 +168,30 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
-    // Third: Owner token return (CRITICAL - must return or lost forever!)
-    const ownerTokenReturn = this.ownerTokenManager.createOwnerTokenReturnOutput(
-      ownerTokenName,
-      changeAddress
-    );
-    outputs.push(ownerTokenReturn);
-
-    // Last: Tag/Untag operation
-    // Note: Using first address as transaction output address (protocol requirement)
+    // Last: Tag/Untag operation. The node creates the qualifier change output
+    // from the operation object itself, so this must be sent to the change address.
     const operationOutput = isUntag
       ? OutputFormatter.formatUntagAddressesOutput({
-          tag_name: qualifierName,
-          addresses: targetAddresses
+          qualifier: qualifierName,
+          addresses: targetAddresses,
+          change_quantity: qualifierQuantity
         })
       : OutputFormatter.formatTagAddressesOutput({
-          tag_name: qualifierName,
+          qualifier: qualifierName,
           addresses: targetAddresses,
-          asset_data: assetData
+          change_quantity: qualifierQuantity
         });
 
-    outputs.push({ [targetAddresses[0]]: operationOutput });
+    outputs.push({ [changeAddress]: operationOutput });
 
     // 14. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 15. Validate owner token is returned (safety check)
-    this.ownerTokenManager.validateOwnerTokenReturn(inputs, orderedOutputs);
-
-    // 16. Create raw transaction
+    // 15. Create raw transaction
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 17. Format and return result
-    const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+    // 16. Format and return result
+    const allUTXOs = [...baseCurrencyUTXOs, ...qualifierUTXOs];
 
     return this.formatResult(
       rawTx,
@@ -215,7 +202,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       burnInfo.amount,
       {
         qualifierName,
-        ownerTokenUsed: ownerTokenName,
+        qualifierAssetUsed: qualifierName,
         targetAddresses,
         addressCount,
         operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES'

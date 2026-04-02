@@ -167,7 +167,8 @@ class NeuraiAssets {
    * @returns {Promise<object>} Transaction data
    */
   async createQualifier(params) {
-    const builder = new IssueQualifierBuilder(this.rpc, this._buildParams(params));
+    const normalized = { ...params, assetName: params.assetName || params.qualifierName };
+    const builder = new IssueQualifierBuilder(this.rpc, this._buildParams(normalized));
     return await builder.build();
   }
 

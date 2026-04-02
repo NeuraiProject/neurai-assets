@@ -120,7 +120,7 @@ describe('AssetNameParser', () => {
   describe('getOwnerTokenName', () => {
     it('should add ! to get owner token name', () => {
       expect(AssetNameParser.getOwnerTokenName('MYTOKEN')).to.equal('MYTOKEN!');
-      expect(AssetNameParser.getOwnerTokenName('$SECURITY')).to.equal('$SECURITY!');
+      expect(AssetNameParser.getOwnerTokenName('$SECURITY')).to.equal('SECURITY!');
     });
 
     it('should return as-is if already an owner token', () => {

@@ -9,7 +9,8 @@
  * - Quantity: 1-10 units only
  * - Units: Always 0 (non-divisible)
  * - Used to tag addresses for restricted asset compliance
- * - Creates owner token (#QUALIFIER!)
+ * - Root qualifiers do not create owner tokens
+ * - Sub-qualifiers consume and return the parent qualifier asset itself
  */
 
 const BaseAssetTransactionBuilder = require('./BaseAssetTransactionBuilder');
@@ -75,13 +76,14 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     const isSub = this.isSubQualifier(assetName);
     const parsed = AssetNameParser.parse(assetName);
 
-    // 3. If sub-qualifier, check parent exists and get owner token
-    let ownerTokenUTXO = null;
-    let ownerTokenName = null;
+    // 3. If sub-qualifier, check parent exists and get parent qualifier input
+    let parentQualifierUTXOs = [];
+    let parentQualifierQuantity = null;
+    let parentQualifierName = null;
     const addresses = await this._getAddresses();
 
     if (isSub) {
-      const parentQualifierName = parsed.parent;
+      parentQualifierName = parsed.parent;
 
       // Check parent qualifier exists
       const parentExists = await this.assetExists(parentQualifierName);
@@ -92,18 +94,16 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
         );
       }
 
-      // Find parent's owner token
-      ownerTokenName = AssetNameParser.getOwnerTokenName(parentQualifierName);
+      // Find parent qualifier balance to spend and return as change
       try {
-        ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
-          ownerTokenName,
-          addresses
-        );
+        const selection = await this.utxoSelector.selectAssetUTXOs(addresses, parentQualifierName, 1);
+        parentQualifierUTXOs = selection.utxos;
+        parentQualifierQuantity = selection.totalAmount;
       } catch (error) {
-        if (error instanceof OwnerTokenNotFoundError) {
+        if (error.name === 'InsufficientFundsError') {
           throw new OwnerTokenNotFoundError(
-            `You must own the parent qualifier's owner token (${ownerTokenName}) to create a sub-qualifier.`,
-            ownerTokenName
+            `You must own the parent qualifier asset (${parentQualifierName}) to create a sub-qualifier.`,
+            parentQualifierName
           );
         }
         throw error;
@@ -129,7 +129,7 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     const changeAddress = await this.getChangeAddress();
 
     // 7. Estimate fee
-    const outputCount = isSub ? 4 : 3; // Sub has owner token return
+    const outputCount = 3;
     const estimatedFee = await this.estimateFee(2, outputCount);
 
     // 8. Calculate total XNA needed
@@ -141,7 +141,7 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     const totalXNAInput = utxoSelection.totalXNA;
 
     // 10. Recalculate fee with actual input count
-    const actualInputCount = baseCurrencyUTXOs.length + (ownerTokenUTXO ? 1 : 0);
+    const actualInputCount = baseCurrencyUTXOs.length + parentQualifierUTXOs.length;
     const actualFee = await this.estimateFee(actualInputCount, outputCount);
 
     // 11. Verify we have enough XNA
@@ -172,16 +172,16 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
       });
     });
 
-    // Add owner token input if sub-qualifier
-    if (ownerTokenUTXO) {
+    // Add parent qualifier inputs if sub-qualifier
+    parentQualifierUTXOs.forEach(parentUTXO => {
       inputs.push({
-        txid: ownerTokenUTXO.txid,
-        vout: ownerTokenUTXO.outputIndex,
-        address: ownerTokenUTXO.address,
-        assetName: ownerTokenUTXO.assetName,
-        satoshis: ownerTokenUTXO.satoshis
+        txid: parentUTXO.txid,
+        vout: parentUTXO.outputIndex,
+        address: parentUTXO.address,
+        assetName: parentUTXO.assetName,
+        satoshis: parentUTXO.satoshis
       });
-    }
+    });
 
     // 14. Build outputs (ORDER CRITICAL!)
     const outputs = [];
@@ -194,21 +194,14 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
-    // Third: Owner token return (if sub-qualifier)
-    if (ownerTokenUTXO && ownerTokenName) {
-      const ownerTokenReturn = this.ownerTokenManager.createOwnerTokenReturnOutput(
-        ownerTokenName,
-        changeAddress
-      );
-      outputs.push(ownerTokenReturn);
-    }
-
     // Last: Issue qualifier operation
     const issueQualifierOutput = OutputFormatter.formatIssueQualifierOutput({
       asset_name: assetName,
       asset_quantity: quantity,
       has_ipfs: hasIpfs,
-      ipfs_hash: ipfsHash
+      ipfs_hash: ipfsHash,
+      root_change_address: isSub ? changeAddress : undefined,
+      change_quantity: isSub ? parentQualifierQuantity : undefined
     });
 
     outputs.push({ [toAddress]: issueQualifierOutput });
@@ -216,18 +209,11 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     // 15. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 16. Validate owner token is returned if sub-qualifier
-    if (ownerTokenUTXO) {
-      this.ownerTokenManager.validateOwnerTokenReturn(inputs, orderedOutputs);
-    }
-
-    // 17. Create raw transaction
+    // 16. Create raw transaction
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 18. Format and return result
-    const allUTXOs = ownerTokenUTXO
-      ? [...baseCurrencyUTXOs, ownerTokenUTXO]
-      : baseCurrencyUTXOs;
+    // 17. Format and return result
+    const allUTXOs = [...baseCurrencyUTXOs, ...parentQualifierUTXOs];
 
     return this.formatResult(
       rawTx,
@@ -240,8 +226,7 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
         assetName,
         qualifierType: isSub ? 'SUB_QUALIFIER' : 'QUALIFIER',
         parentQualifier: isSub ? parsed.parent : null,
-        ownerTokenName: assetName + '!',
-        parentOwnerTokenUsed: ownerTokenName,
+        parentQualifierUsed: parentQualifierName,
         operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER'
       }
     );

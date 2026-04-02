@@ -52,8 +52,8 @@ class NetworkDetector {
       return 'xna';
     }
 
-    // Testnet addresses start with 'm' or 'n'
-    if (address.startsWith(NETWORKS.TESTNET.addressPrefix) || address.startsWith('n')) {
+    // Testnet addresses start with 't' (prefix byte 0x7f = 127)
+    if (address.startsWith(NETWORKS.TESTNET.addressPrefix)) {
       return 'xna-test';
     }
 

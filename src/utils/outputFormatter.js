@@ -39,13 +39,18 @@ class OutputFormatter {
   static formatIssueUniqueOutput(params) {
     const { root_name, asset_tags, ipfs_hashes } = params;
 
-    return {
+    const output = {
       issue_unique: {
         root_name,
-        asset_tags,
-        ipfs_hashes: ipfs_hashes || []
+        asset_tags
       }
     };
+
+    if (ipfs_hashes && ipfs_hashes.length > 0) {
+      output.issue_unique.ipfs_hashes = ipfs_hashes;
+    }
+
+    return output;
   }
 
   /**
@@ -61,10 +66,11 @@ class OutputFormatter {
       units,
       reissuable,
       has_ipfs,
-      ipfs_hash
+      ipfs_hash,
+      owner_change_address
     } = params;
 
-    return {
+    const output = {
       issue_restricted: {
         asset_name,
         asset_quantity,
@@ -75,6 +81,12 @@ class OutputFormatter {
         ipfs_hash: ipfs_hash || ''
       }
     };
+
+    if (owner_change_address) {
+      output.issue_restricted.owner_change_address = owner_change_address;
+    }
+
+    return output;
   }
 
   /**
@@ -87,10 +99,12 @@ class OutputFormatter {
       asset_name,
       asset_quantity,
       has_ipfs,
-      ipfs_hash
+      ipfs_hash,
+      root_change_address,
+      change_quantity
     } = params;
 
-    return {
+    const output = {
       issue_qualifier: {
         asset_name,
         asset_quantity,
@@ -98,6 +112,16 @@ class OutputFormatter {
         ipfs_hash: ipfs_hash || ''
       }
     };
+
+    if (root_change_address) {
+      output.issue_qualifier.root_change_address = root_change_address;
+    }
+
+    if (change_quantity !== undefined && change_quantity !== null) {
+      output.issue_qualifier.change_quantity = change_quantity;
+    }
+
+    return output;
   }
 
   /**
@@ -110,7 +134,8 @@ class OutputFormatter {
       asset_name,
       asset_quantity,
       reissuable,
-      new_ipfs
+      new_ipfs,
+      owner_change_address
     } = params;
 
     const output = {
@@ -129,6 +154,10 @@ class OutputFormatter {
       output.reissue.ipfs_hash = new_ipfs;
     }
 
+    if (owner_change_address) {
+      output.reissue.owner_change_address = owner_change_address;
+    }
+
     return output;
   }
 
@@ -144,7 +173,8 @@ class OutputFormatter {
       change_verifier,
       new_verifier,
       reissuable,
-      new_ipfs
+      new_ipfs,
+      owner_change_address
     } = params;
 
     const output = {
@@ -165,6 +195,10 @@ class OutputFormatter {
 
     if (new_ipfs) {
       output.reissue_restricted.ipfs_hash = new_ipfs;
+    }
+
+    if (owner_change_address) {
+      output.reissue_restricted.owner_change_address = owner_change_address;
     }
 
     return output;
@@ -191,18 +225,23 @@ class OutputFormatter {
    */
   static formatTagAddressesOutput(params) {
     const {
-      tag_name,
+      qualifier,
       addresses,
-      asset_data
+      change_quantity
     } = params;
 
-    return {
+    const output = {
       tag_addresses: {
-        tag_name,
-        addresses,
-        asset_data: asset_data || ''
+        qualifier,
+        addresses
       }
     };
+
+    if (change_quantity !== undefined && change_quantity !== null) {
+      output.tag_addresses.change_quantity = change_quantity;
+    }
+
+    return output;
   }
 
   /**
@@ -212,16 +251,23 @@ class OutputFormatter {
    */
   static formatUntagAddressesOutput(params) {
     const {
-      tag_name,
-      addresses
+      qualifier,
+      addresses,
+      change_quantity
     } = params;
 
-    return {
+    const output = {
       untag_addresses: {
-        tag_name,
+        qualifier,
         addresses
       }
     };
+
+    if (change_quantity !== undefined && change_quantity !== null) {
+      output.untag_addresses.change_quantity = change_quantity;
+    }
+
+    return output;
   }
 
   /**

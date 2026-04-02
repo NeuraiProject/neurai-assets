@@ -13,8 +13,8 @@ const ASSET_COSTS = {
   ISSUE_RESTRICTED: 3000,
   REISSUE: 200,
   REISSUE_RESTRICTED: 200,
-  TAG_ADDRESS: 0.1,   // Per address
-  UNTAG_ADDRESS: 0.1, // Per address
+  TAG_ADDRESS: 0.2,   // Per address
+  UNTAG_ADDRESS: 0.2, // Per address
   FREEZE_ADDRESS: 0,  // No cost (requires owner token)
   UNFREEZE_ADDRESS: 0, // No cost (requires owner token)
   FREEZE_ASSET: 0,    // No cost (requires owner token)

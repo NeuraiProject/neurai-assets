@@ -14,7 +14,7 @@ const NETWORKS = {
   TESTNET: {
     name: 'xna-test',
     displayName: 'Neurai Testnet',
-    addressPrefix: 'm',
+    addressPrefix: 't',
     assetNameMaxLength: 32,  // Same as mainnet
     defaultRPCPort: 19101,
     coin: 'TXNA'
@@ -96,7 +96,7 @@ function getNetworkConfig(networkName) {
 function detectNetworkFromAddress(address) {
   if (address.startsWith('N')) {
     return 'xna';
-  } else if (address.startsWith('m') || address.startsWith('n')) {
+  } else if (address.startsWith('t')) {
     return 'xna-test';
   } else {
     throw new Error(`Cannot detect network from address: ${address}`);

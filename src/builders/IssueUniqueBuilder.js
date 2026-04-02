@@ -202,14 +202,9 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
-    // Third: Owner token return (CRITICAL - must return or lost forever!)
-    const ownerTokenReturn = this.ownerTokenManager.createOwnerTokenReturnOutput(
-      ownerTokenName,
-      changeAddress
-    );
-    outputs.push(ownerTokenReturn);
-
     // Last: Issue unique operation
+    // NOTE: owner token return is handled automatically by the node when processing
+    // issue_unique — adding it manually would cause TOKEN! to appear twice in outputs
     const issueUniqueOutput = OutputFormatter.formatIssueUniqueOutput({
       root_name: rootName,
       asset_tags: assetTags,
@@ -221,16 +216,14 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     // 15. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 16. Validate owner token is returned (safety check)
-    this.ownerTokenManager.validateOwnerTokenReturn(inputs, orderedOutputs);
-
-    // 17. Create raw transaction
+    // 16. Create raw transaction
+    // NOTE: validateOwnerTokenReturn removed — the node returns TOKEN! automatically
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 18. Build list of created NFT names
+    // 17. Build list of created NFT names
     const createdNFTs = assetTags.map(tag => `${rootName}#${tag}`);
 
-    // 19. Format and return result
+    // 18. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
 
     return this.formatResult(

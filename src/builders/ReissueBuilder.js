@@ -200,7 +200,8 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
       asset_name: assetName,
       asset_quantity: this.toSatoshis(quantity, units),
       reissuable: reissuable !== undefined ? reissuable : undefined,
-      new_ipfs: newIpfs || undefined
+      new_ipfs: newIpfs || undefined,
+      owner_change_address: changeAddress
     });
 
     outputs.push({ [toAddress]: reissueOutput });

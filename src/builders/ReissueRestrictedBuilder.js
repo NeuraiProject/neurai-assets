@@ -5,7 +5,7 @@
  * Reissue Restricted:
  * - Mints additional supply of restricted asset
  * - Cost: 200 XNA (burned)
- * - Requires asset's owner token ($ASSET!)
+ * - Requires asset's owner token (ASSET!)
  * - Can update verifier string
  * - Can lock asset (make it non-reissuable)
  * - Can update IPFS metadata
@@ -200,14 +200,6 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
-    // Third: Owner token return (CRITICAL - must return or lost forever!)
-    const ownerReturnAddress = this.params.ownerChangeAddress || changeAddress;
-    const ownerTokenReturn = this.ownerTokenManager.createOwnerTokenReturnOutput(
-      ownerTokenName,
-      ownerReturnAddress
-    );
-    outputs.push(ownerTokenReturn);
-
     // Last: Reissue restricted operation
     const units = assetData.units || 0;
     const reissueRestrictedOutput = OutputFormatter.formatReissueRestrictedOutput({
@@ -216,7 +208,8 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
       change_verifier: changeVerifier,
       new_verifier: changeVerifier ? newVerifier : undefined,
       reissuable: reissuable !== undefined ? reissuable : undefined,
-      new_ipfs: newIpfs || undefined
+      new_ipfs: newIpfs || undefined,
+      owner_change_address: this.params.ownerChangeAddress || changeAddress
     });
 
     outputs.push({ [toAddress]: reissueRestrictedOutput });
@@ -224,13 +217,10 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
     // 16. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 17. Validate owner token is returned (safety check)
-    this.ownerTokenManager.validateOwnerTokenReturn(inputs, orderedOutputs);
-
-    // 18. Create raw transaction
+    // 17. Create raw transaction
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 19. Format and return result
+    // 18. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
 
     // Extract qualifiers from new verifier if changed

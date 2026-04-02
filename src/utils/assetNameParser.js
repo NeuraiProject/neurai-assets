@@ -128,6 +128,9 @@ class AssetNameParser {
     if (this.isOwnerToken(assetName)) {
       return assetName;
     }
+    if (this.isRestricted(assetName)) {
+      return assetName.slice(1) + '!';
+    }
     return assetName + '!';
   }
 

@@ -9,12 +9,12 @@
  * - Requires verifier string (boolean logic with qualifiers)
  * - Only addresses meeting verifier requirements can receive/hold
  * - Can freeze individual addresses or entire asset
- * - Creates owner token ($ASSET!)
+ * - Creates owner token (ASSET!)
  */
 
 const BaseAssetTransactionBuilder = require('./BaseAssetTransactionBuilder');
-const { OutputFormatter } = require('../utils');
-const { AssetExistsError } = require('../errors');
+const { OutputFormatter, AssetNameParser } = require('../utils');
+const { AssetExistsError, OwnerTokenNotFoundError } = require('../errors');
 const { IpfsValidator, VerifierValidator } = require('../validators');
 
 class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
@@ -98,21 +98,39 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
-    // 6. Estimate fee
-    const estimatedFee = await this.estimateFee(1, 3);
+    // 6. Find owner token UTXO (CRITICAL: node requires it as input)
+    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
+    let ownerTokenUTXO;
+    try {
+      ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
+        ownerTokenName,
+        addresses
+      );
+    } catch (error) {
+      if (error instanceof OwnerTokenNotFoundError) {
+        throw new OwnerTokenNotFoundError(
+          `You must own the owner token (${ownerTokenName}) to issue the restricted asset ${assetName}.`,
+          ownerTokenName
+        );
+      }
+      throw error;
+    }
 
-    // 7. Calculate total XNA needed
+    // 7. Estimate fee (+1 for owner token input)
+    const estimatedFee = await this.estimateFee(2, 4);
+
+    // 8. Calculate total XNA needed
     const totalXNANeeded = burnInfo.amount + estimatedFee;
 
-    // 8. Select XNA UTXOs
+    // 9. Select XNA UTXOs
     const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    // 9. Recalculate fee with actual input count
-    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length, 3);
+    // 10. Recalculate fee with actual input count (+1 for owner token)
+    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length + 1, 4);
 
-    // 10. Verify we have enough XNA
+    // 11. Verify we have enough XNA
     const totalRequired = burnInfo.amount + actualFee;
     if (totalXNAInput < totalRequired) {
       const additionalNeeded = totalRequired - totalXNAInput + 0.001;
@@ -120,22 +138,35 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
       baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
     }
 
-    // 11. Calculate XNA change
+    // 12. Calculate XNA change
     const finalTotalInput = baseCurrencyUTXOs.reduce(
       (sum, utxo) => sum + utxo.satoshis / 100000000,
       0
     );
     const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
 
-    // 12. Build inputs
-    const inputs = baseCurrencyUTXOs.map(utxo => ({
-      txid: utxo.txid,
-      vout: utxo.outputIndex,
-      address: utxo.address,
-      satoshis: utxo.satoshis
-    }));
+    // 13. Build inputs (XNA + owner token)
+    const inputs = [];
 
-    // 13. Build outputs (ORDER CRITICAL!)
+    baseCurrencyUTXOs.forEach(utxo => {
+      inputs.push({
+        txid: utxo.txid,
+        vout: utxo.outputIndex,
+        address: utxo.address,
+        satoshis: utxo.satoshis
+      });
+    });
+
+    // Add owner token input (node requires it to issue restricted asset)
+    inputs.push({
+      txid: ownerTokenUTXO.txid,
+      vout: ownerTokenUTXO.outputIndex,
+      address: ownerTokenUTXO.address,
+      assetName: ownerTokenUTXO.assetName,
+      satoshis: ownerTokenUTXO.satoshis
+    });
+
+    // 14. Build outputs (ORDER CRITICAL!)
     const outputs = [];
 
     // First: Burn output
@@ -154,28 +185,31 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
       units: units,
       reissuable: reissuable,
       has_ipfs: hasIpfs,
-      ipfs_hash: ipfsHash
+      ipfs_hash: ipfsHash,
+      owner_change_address: changeAddress
     });
 
     outputs.push({ [toAddress]: issueRestrictedOutput });
 
-    // 14. Order outputs (protocol requirement)
+    // 15. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 15. Create raw transaction
+    // 16. Create raw transaction
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 16. Format and return result
+    // 17. Format and return result
+    const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+
     return this.formatResult(
       rawTx,
-      baseCurrencyUTXOs,
+      allUTXOs,
       inputs,
       orderedOutputs,
       actualFee,
       burnInfo.amount,
       {
         assetName,
-        ownerTokenName: assetName + '!',
+        ownerTokenName,
         verifierString,
         requiredQualifiers,
         operationType: 'ISSUE_RESTRICTED'

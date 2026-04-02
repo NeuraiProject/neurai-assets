@@ -47,14 +47,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
           );
         }
 
-        // Basic address validation
-        const validPrefixes = this.network === 'xna' ? ['N'] : ['m', 'n'];
-        if (!validPrefixes.some(prefix => address.startsWith(prefix))) {
-          throw new InvalidAddressError(
-            `addresses[${index}] has invalid prefix for network ${this.network}`,
-            address
-          );
-        }
+        // Address prefix validation is left to the node (varies by network)
       });
     }
 
@@ -162,13 +155,6 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
     }
 
-    // Second: Owner token return (CRITICAL - must return or lost forever!)
-    const ownerTokenReturn = this.ownerTokenManager.createOwnerTokenReturnOutput(
-      ownerTokenName,
-      changeAddress
-    );
-    outputs.push(ownerTokenReturn);
-
     // Last: Freeze/Unfreeze operation
     let operationOutput;
     let targetAddresses = [];
@@ -180,7 +166,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
           asset_name: assetName,
           addresses: targetAddresses
         });
-        outputs.push({ [targetAddresses[0]]: operationOutput });
+        outputs.push({ [changeAddress]: operationOutput });
         break;
 
       case 'UNFREEZE_ADDRESSES':
@@ -189,7 +175,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
           asset_name: assetName,
           addresses: targetAddresses
         });
-        outputs.push({ [targetAddresses[0]]: operationOutput });
+        outputs.push({ [changeAddress]: operationOutput });
         break;
 
       case 'FREEZE_ASSET':
@@ -209,13 +195,10 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     // 13. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 14. Validate owner token is returned (safety check)
-    this.ownerTokenManager.validateOwnerTokenReturn(inputs, orderedOutputs);
-
-    // 15. Create raw transaction
+    // 14. Create raw transaction
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
-    // 16. Format and return result
+    // 15. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
 
     return this.formatResult(

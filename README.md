@@ -96,22 +96,22 @@ const result = await assets.reissueAsset({
 ### Create UNIQUE Assets (NFTs)
 
 ```javascript
+// Without IPFS metadata
 const result = await assets.createUniqueAssets({
-  rootAssetName: 'MYTOKEN',
-  assetTags: [
-    {
-      tag: 'NFT001',
-      hasIpfs: true,
-      ipfsHash: 'QmNFT1...'
-    },
-    {
-      tag: 'NFT002',
-      hasIpfs: true,
-      ipfsHash: 'QmNFT2...'
-    }
-  ]
+  rootName: 'MYTOKEN',
+  assetTags: ['NFT001', 'NFT002', 'NFT003']
+});
+
+// With IPFS metadata (ipfsHashes must be same length as assetTags)
+const result = await assets.createUniqueAssets({
+  rootName: 'MYTOKEN',
+  assetTags: ['NFT001', 'NFT002'],
+  ipfsHashes: ['QmNFT1...', 'QmNFT2...']
 });
 ```
+
+> **Note**: UNIQUE asset properties (`units`, `reissuable`) are always `0` and are
+> set automatically by the node — they cannot be configured per asset.
 
 ### Create QUALIFIER (KYC Tags)
 
@@ -362,6 +362,11 @@ When you create an asset, an **owner token** is automatically generated (e.g., `
 ⚠️ **If you lose the owner token, you lose these capabilities PERMANENTLY**
 
 The library automatically validates that the owner token is returned in each operation to prevent accidental loss.
+
+> **UNIQUE assets exception**: When issuing UNIQUE assets (`ROOT#TAG`), the Neurai node
+> returns the owner token automatically as part of processing the `issue_unique` operation.
+> The library does not add a manual return output for this case — doing so would duplicate
+> the owner token in the outputs and cause the transaction to fail with "Assets would be burnt".
 
 ## Operation Costs
 
