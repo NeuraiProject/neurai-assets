@@ -5,11 +5,12 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 ## Features
 
 - ✅ **Non-custodial**: Library builds unsigned transactions, your wallet signs them
-- ✅ **All asset types**: ROOT, SUB, UNIQUE (NFTs), QUALIFIER, RESTRICTED
+- ✅ **All asset types**: ROOT, SUB, UNIQUE (NFTs), QUALIFIER, RESTRICTED, DEPIN
 - ✅ **Complete operations**: Creation, reissuance, tagging, freezing
 - ✅ **RPC queries**: Complete wrapper for all asset query methods
 - ✅ **Client-side validation**: Prevents errors before creating transactions
 - ✅ **Owner token protection**: Validation to prevent permanent loss
+- ✅ **PQ-ready networks**: Supports `xna-pq` and `xna-pq-test` with `nq1...` / `tnq1...` addresses
 
 ## Supported Asset Types
 
@@ -21,6 +22,7 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 | **QUALIFIER** | `#KYC` | 2000 XNA | Compliance tag |
 | **SUB_QUALIFIER** | `#PARENT/#SUB` | 200 XNA | Sub-qualifier |
 | **RESTRICTED** | `$SECURITY` | 3000 XNA | Security token with compliance |
+| **DEPIN** | `&DEVICE` or `&DEVICE/ROUTER001` | 10 XNA | Soulbound asset with holder validity controls |
 
 ## Installation
 
@@ -52,6 +54,17 @@ const result = await assets.createRootAsset({
 // Sign and broadcast
 const signedTx = await wallet.signTransaction(result.rawTx);
 const txid = await wallet.broadcastTransaction(signedTx);
+```
+
+You can also initialize the library with PQ networks and addresses:
+
+```javascript
+const assetsPQ = new NeuraiAssets(rpc, {
+  network: 'xna-pq',                 // or 'xna-pq-test'
+  addresses: ['nq1yourpqaddress...'],
+  changeAddress: 'nq1yourpqchange...',
+  toAddress: 'nq1recipientpqaddress...'
+});
 ```
 
 ## Operation Examples
@@ -92,6 +105,20 @@ const result = await assets.reissueAsset({
   newIpfs: 'Qm...'        // Update IPFS (optional)
 });
 ```
+
+### Create DEPIN Asset
+
+```javascript
+const result = await assets.createDepinAsset({
+  assetName: '&DEVICE/ROUTER001',
+  quantity: 1,
+  reissuable: false,
+  hasIpfs: false
+});
+```
+
+> **Note**: DEPIN assets always use `units = 0`. The library accepts both legacy
+> and PQ addresses as recipients depending on the configured network.
 
 ### Create UNIQUE Assets (NFTs)
 
@@ -319,6 +346,30 @@ const exists = await assets.assetExists('MYTOKEN');
 console.log(exists); // true/false
 ```
 
+### View DEPIN Holders
+
+```javascript
+const holders = await assets.listDepinHolders('&DEVICE/ROUTER001');
+console.log(holders);
+// [
+//   { address: 'nq1holder...', amount: 1, valid: 1 },
+//   { address: 'nq1holder2...', amount: 1, valid: 0 }
+// ]
+```
+
+### Check DEPIN Validity for an Address
+
+```javascript
+const validity = await assets.checkDepinValidity('&DEVICE/ROUTER001', 'nq1holder...');
+console.log(validity);
+// {
+//   has_asset: true,
+//   amount: 1,
+//   valid: 1,
+//   blocked: false
+// }
+```
+
 ### Detect Asset Type
 
 ```javascript
@@ -327,7 +378,8 @@ const type2 = assets.getAssetType('PARENT/SUB');    // 'SUB'
 const type3 = assets.getAssetType('TOKEN#NFT');     // 'UNIQUE'
 const type4 = assets.getAssetType('#KYC');          // 'QUALIFIER'
 const type5 = assets.getAssetType('$SECURITY');     // 'RESTRICTED'
-const type6 = assets.getAssetType('MYTOKEN!');      // 'OWNER'
+const type6 = assets.getAssetType('&DEVICE/ONE');   // 'DEPIN'
+const type7 = assets.getAssetType('MYTOKEN!');      // 'OWNER'
 ```
 
 ## Transaction Result Structure
@@ -337,15 +389,14 @@ All creation/reissuance operations return an object with this structure:
 ```javascript
 {
   rawTx: 'hex string',           // Unsigned transaction (to sign with wallet)
+  utxos: [...],                  // UTXOs selected for the operation
   inputs: [...],                  // Transaction inputs
-  outputs: {...},                 // Ordered outputs
+  outputs: [...],                 // Ordered outputs
   fee: 0.001,                     // Fee in XNA
-  burn: 1000,                     // Burned amount in XNA
-  metadata: {                     // Operation-specific metadata
-    assetName: 'MYTOKEN',
-    ownerTokenName: 'MYTOKEN!',
-    operationType: 'ISSUE_ROOT'
-  }
+  burnAmount: 1000,               // Burned amount in XNA
+  assetName: 'MYTOKEN',           // Operation-specific fields vary by builder
+  ownerTokenName: 'MYTOKEN!',
+  operationType: 'ISSUE_ROOT'
 }
 ```
 
@@ -358,6 +409,7 @@ When you create an asset, an **owner token** is automatically generated (e.g., `
 - Create SUB assets
 - Manage tags (if qualifier)
 - Freeze/unfreeze (if restricted)
+- Manage DEPIN reissuance and controls (if depin)
 
 ⚠️ **If you lose the owner token, you lose these capabilities PERMANENTLY**
 
@@ -378,7 +430,9 @@ The library automatically validates that the owner token is returned in each ope
 | Create QUALIFIER (root) | 2000 |
 | Create QUALIFIER (sub) | 200 |
 | Create RESTRICTED asset | 3000 |
+| Create DEPIN asset | 10 |
 | Reissue ROOT/SUB | 200 |
+| Reissue DEPIN | 200 |
 | Reissue RESTRICTED | 200 |
 | Tag/Untag address | 0.1 (per address) |
 | Freeze/Unfreeze address | 0 (network fee only) |
@@ -415,10 +469,36 @@ const assets = new NeuraiAssets(rpc, {
 const assets = new NeuraiAssets(rpc, {
   network: 'xna-test',
   addresses: [...],
-  changeAddress: 'm...' // or 'n...'
-  toAddress: 'm...'
+  changeAddress: 't...',
+  toAddress: 't...'
+});
+
+// PQ Mainnet
+const assetsPQ = new NeuraiAssets(rpc, {
+  network: 'xna-pq',
+  addresses: ['nq1...'],
+  changeAddress: 'nq1...',
+  toAddress: 'nq1...'
+});
+
+// PQ Testnet
+const assetsPQTest = new NeuraiAssets(rpc, {
+  network: 'xna-pq-test',
+  addresses: ['tnq1...'],
+  changeAddress: 'tnq1...',
+  toAddress: 'tnq1...'
 });
 ```
+
+The library accepts these network names:
+
+- `xna`: legacy/mainnet address flow (`N...`)
+- `xna-test`: legacy/testnet address flow (`t...`)
+- `xna-pq`: PQ mainnet address flow (`nq1...`)
+- `xna-pq-test`: PQ testnet address flow (`tnq1...`)
+
+If you need to derive PQ addresses, use `neurai-key` and pass the resulting `nq1...`
+or `tnq1...` addresses into this library.
 
 ## Update Configuration
 
@@ -448,6 +528,17 @@ const builder = new builders.IssueRootBuilder(rpc, {
 
 const result = await builder.build();
 ```
+
+The builders module also includes:
+
+- `IssueDepinBuilder`
+- `IssueRootBuilder`
+- `IssueSubBuilder`
+- `IssueUniqueBuilder`
+- `IssueQualifierBuilder`
+- `IssueRestrictedBuilder`
+- `ReissueBuilder`
+- `ReissueRestrictedBuilder`
 
 ## Error Handling
 
@@ -525,3 +616,7 @@ const signedTx = await wallet.signTransaction(result.rawTx);
 const txid = await wallet.broadcastTransaction(signedTx);
 console.log('Transaction ID:', txid);
 ```
+
+For PQ wallets, derive addresses externally with `neurai-key` using `xna-pq` or
+`xna-pq-test`, then initialize `NeuraiAssets` with those addresses and the matching
+network name.
