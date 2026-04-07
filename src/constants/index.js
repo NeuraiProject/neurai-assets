@@ -8,6 +8,7 @@ const { ASSET_COSTS, getAssetCost, getUniqueAssetCost, getTaggingCost } = requir
 const {
   MAINNET_BURN_ADDRESSES,
   TESTNET_BURN_ADDRESSES,
+  resolveNetworkFamily,
   getBurnAddress,
   isBurnAddress
 } = require('./burnAddresses');
@@ -32,6 +33,7 @@ module.exports = {
   // Burn Addresses
   MAINNET_BURN_ADDRESSES,
   TESTNET_BURN_ADDRESSES,
+  resolveNetworkFamily,
   getBurnAddress,
   isBurnAddress,
 

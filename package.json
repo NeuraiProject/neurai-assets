@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-assets",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Non-custodial Neurai asset management library for JavaScript",
   "main": "./src/index.js",
   "scripts": {
@@ -29,13 +29,16 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {},
   "devDependencies": {
     "chai": "^4.3.10",
-    "mocha": "^10.2.0"
+    "mocha": "^11.7.5"
+  },
+  "overrides": {
+    "diff": "8.0.4",
+    "serialize-javascript": "7.0.5"
   },
   "peerDependencies": {
-    "@neuraiproject/neurai-rpc": "^0.4.6"
+    "@neuraiproject/neurai-rpc": "^0.4.7"
   },
   "engines": {
     "node": ">=14.0.0"

@@ -9,6 +9,7 @@ const BaseAssetTransactionBuilder = require('./BaseAssetTransactionBuilder');
 // Basic Builders
 const IssueRootBuilder = require('./IssueRootBuilder');
 const IssueSubBuilder = require('./IssueSubBuilder');
+const IssueDepinBuilder = require('./IssueDepinBuilder');
 const ReissueBuilder = require('./ReissueBuilder');
 
 // Advanced Builders
@@ -26,6 +27,7 @@ module.exports = {
   // Basic Builders
   IssueRootBuilder,
   IssueSubBuilder,
+  IssueDepinBuilder,
   ReissueBuilder,
 
   // Advanced Builders

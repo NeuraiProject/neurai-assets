@@ -58,6 +58,15 @@ describe('AssetNameParser', () => {
       expect(result.name).to.equal('$SECURITY');
     });
 
+    it('should parse DEPIN asset names', () => {
+      const result = AssetNameParser.parse('&FRANCE/PARIS');
+      expect(result.type).to.equal(AssetType.DEPIN);
+      expect(result.prefix).to.equal('&');
+      expect(result.isDepin).to.be.true;
+      expect(result.parent).to.equal('&FRANCE');
+      expect(result.subName).to.equal('PARIS');
+    });
+
     it('should parse OWNER token names', () => {
       const result = AssetNameParser.parse('MYTOKEN!');
       expect(result.type).to.equal(AssetType.OWNER);
@@ -73,6 +82,15 @@ describe('AssetNameParser', () => {
       expect(result.isRestricted).to.be.true;
       expect(result.baseName).to.equal('$SECURITY');
     });
+
+    it('should parse DEPIN OWNER token names', () => {
+      const result = AssetNameParser.parse('&FRANCE!');
+      expect(result.type).to.equal(AssetType.OWNER);
+      expect(result.isOwner).to.be.true;
+      expect(result.isDepin).to.be.true;
+      expect(result.baseType).to.equal(AssetType.DEPIN);
+      expect(result.baseName).to.equal('&FRANCE');
+    });
   });
 
   describe('getType', () => {
@@ -83,6 +101,7 @@ describe('AssetNameParser', () => {
       expect(AssetNameParser.getType('#KYC')).to.equal(AssetType.QUALIFIER);
       expect(AssetNameParser.getType('#KYC/TIER1')).to.equal(AssetType.SUB_QUALIFIER);
       expect(AssetNameParser.getType('$SECURITY')).to.equal(AssetType.RESTRICTED);
+      expect(AssetNameParser.getType('&FRANCE/PARIS')).to.equal(AssetType.DEPIN);
       expect(AssetNameParser.getType('MYTOKEN!')).to.equal(AssetType.OWNER);
     });
   });
@@ -103,6 +122,10 @@ describe('AssetNameParser', () => {
     it('should return parent for SUB_QUALIFIER', () => {
       expect(AssetNameParser.getParent('#KYC/TIER1')).to.equal('#KYC');
     });
+
+    it('should return parent for DEPIN sub-assets', () => {
+      expect(AssetNameParser.getParent('&FRANCE/PARIS')).to.equal('&FRANCE');
+    });
   });
 
   describe('isOwnerToken', () => {
@@ -121,6 +144,7 @@ describe('AssetNameParser', () => {
     it('should add ! to get owner token name', () => {
       expect(AssetNameParser.getOwnerTokenName('MYTOKEN')).to.equal('MYTOKEN!');
       expect(AssetNameParser.getOwnerTokenName('$SECURITY')).to.equal('SECURITY!');
+      expect(AssetNameParser.getOwnerTokenName('&FRANCE')).to.equal('&FRANCE!');
     });
 
     it('should return as-is if already an owner token', () => {
@@ -184,6 +208,19 @@ describe('AssetNameParser', () => {
     it('should return false for non-sub assets', () => {
       expect(AssetNameParser.isSub('MYTOKEN')).to.be.false;
       expect(AssetNameParser.isSub('#KYC/TIER1')).to.be.false;
+      expect(AssetNameParser.isSub('&FRANCE/PARIS')).to.be.false;
+    });
+  });
+
+  describe('isDepin', () => {
+    it('should identify depin assets', () => {
+      expect(AssetNameParser.isDepin('&FRANCE')).to.be.true;
+      expect(AssetNameParser.isDepin('&FRANCE/PARIS')).to.be.true;
+    });
+
+    it('should return false for non-depin assets', () => {
+      expect(AssetNameParser.isDepin('MYTOKEN')).to.be.false;
+      expect(AssetNameParser.isDepin('$SECURITY')).to.be.false;
     });
   });
 

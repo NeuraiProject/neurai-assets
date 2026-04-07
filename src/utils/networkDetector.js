@@ -40,11 +40,19 @@ class NetworkDetector {
   /**
    * Detect network from address
    * @param {string} address - Neurai address
-   * @returns {string} Network name ('xna' or 'xna-test')
+   * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
    */
   static detectFromAddress(address) {
     if (!address || typeof address !== 'string') {
       throw new Error('Address must be a non-empty string');
+    }
+
+    if (address.startsWith(NETWORKS.MAINNET_PQ.pqAddressPrefix)) {
+      return 'xna-pq';
+    }
+
+    if (address.startsWith(NETWORKS.TESTNET_PQ.pqAddressPrefix)) {
+      return 'xna-pq-test';
     }
 
     // Mainnet addresses start with 'N'
@@ -63,7 +71,7 @@ class NetworkDetector {
   /**
    * Detect network from multiple addresses
    * @param {string[]} addresses - Array of addresses
-   * @returns {string} Network name ('xna' or 'xna-test')
+   * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
    */
   static detectFromAddresses(addresses) {
     if (!Array.isArray(addresses) || addresses.length === 0) {
@@ -87,7 +95,7 @@ class NetworkDetector {
   /**
    * Validate that addresses match expected network
    * @param {string[]} addresses - Array of addresses
-   * @param {string} expectedNetwork - Expected network ('xna' or 'xna-test')
+   * @param {string} expectedNetwork - Expected network ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
    * @returns {boolean} True if all addresses match network
    */
   static validateAddressesNetwork(addresses, expectedNetwork) {
@@ -117,6 +125,10 @@ class NetworkDetector {
       return NETWORKS.MAINNET;
     } else if (network === 'xna-test' || network === 'testnet') {
       return NETWORKS.TESTNET;
+    } else if (network === 'xna-pq' || network === 'mainnet-pq') {
+      return NETWORKS.MAINNET_PQ;
+    } else if (network === 'xna-pq-test' || network === 'testnet-pq') {
+      return NETWORKS.TESTNET_PQ;
     } else {
       throw new Error(`Unknown network: ${network}`);
     }
@@ -128,7 +140,7 @@ class NetworkDetector {
    * @returns {boolean} True if mainnet
    */
   static isMainnet(network) {
-    return network === 'xna' || network === 'mainnet';
+    return network === 'xna' || network === 'mainnet' || network === 'xna-pq' || network === 'mainnet-pq';
   }
 
   /**
@@ -137,7 +149,11 @@ class NetworkDetector {
    * @returns {boolean} True if testnet
    */
   static isTestnet(network) {
-    return network === 'xna-test' || network === 'testnet' || network === 'regtest';
+    return network === 'xna-test' ||
+      network === 'testnet' ||
+      network === 'regtest' ||
+      network === 'xna-pq-test' ||
+      network === 'testnet-pq';
   }
 }
 

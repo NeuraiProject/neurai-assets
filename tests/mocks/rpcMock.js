@@ -58,7 +58,9 @@ class RPCMock {
       'isaddressfrozen': false,
       'checkglobalrestriction': false,
       'getverifierstring': '',
-      'isvalidverifierstring': true
+      'isvalidverifierstring': true,
+      'listdepinholders': [],
+      'checkdepinvalidity': { has_asset: false }
     };
 
     return defaults[method] || null;

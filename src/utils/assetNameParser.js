@@ -15,6 +15,7 @@ class AssetNameParser {
     const isOwner = name.endsWith('!');
     const isRestricted = name.startsWith('$');
     const isQualifier = name.startsWith('#');
+    const isDepin = name.startsWith('&');
     const cleanName = isOwner ? name.slice(0, -1) : name;
 
     let type;
@@ -40,6 +41,15 @@ class AssetNameParser {
       // RESTRICTED: $NAME
       type = AssetType.RESTRICTED;
       prefix = '$';
+    } else if (isDepin) {
+      // DEPIN: &NAME or &NAME/SUB
+      type = AssetType.DEPIN;
+      prefix = '&';
+      if (cleanName.includes('/')) {
+        const parts = cleanName.split('/');
+        parent = parts[0];
+        subName = parts.slice(1).join('/');
+      }
     } else if (cleanName.includes('#')) {
       // UNIQUE: ROOT#TAG
       type = AssetType.UNIQUE;
@@ -71,6 +81,7 @@ class AssetNameParser {
         prefix,
         isOwner: true,
         isRestricted: cleanName.startsWith('$'),
+        isDepin: cleanName.startsWith('&'),
         isQualifier: false,
         fullName: name,
         baseName: cleanName
@@ -86,6 +97,7 @@ class AssetNameParser {
       prefix,
       isOwner,
       isRestricted,
+      isDepin,
       isQualifier,
       fullName: name,
       baseName: cleanName
@@ -179,7 +191,16 @@ class AssetNameParser {
    * @returns {boolean} True if sub-asset
    */
   static isSub(name) {
-    return name.includes('/') && !name.startsWith('#');
+    return name.includes('/') && !name.startsWith('#') && !name.startsWith('&');
+  }
+
+  /**
+   * Check if asset is a DEPIN asset
+   * @param {string} name - Asset name
+   * @returns {boolean} True if DEPIN
+   */
+  static isDepin(name) {
+    return name.startsWith('&');
   }
 
   /**

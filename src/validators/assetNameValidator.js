@@ -241,6 +241,77 @@ class AssetNameValidator {
   }
 
   /**
+   * Validate DEPIN asset name
+   * Format: &NAME or &NAME/SUB[/...]
+   */
+  static validateDepin(name) {
+    if (!name || typeof name !== 'string') {
+      throw new InvalidAssetNameError('DEPIN asset name must be a non-empty string', name);
+    }
+
+    if (!name.startsWith(ASSET_NAME_RULES.DEPIN.prefix)) {
+      throw new InvalidAssetNameError(
+        `DEPIN asset must start with ${ASSET_NAME_RULES.DEPIN.prefix}`,
+        name
+      );
+    }
+
+    if (name.length > ASSET_NAME_RULES.DEPIN.maxLength) {
+      throw new InvalidAssetNameError(
+        `DEPIN asset name cannot exceed ${ASSET_NAME_RULES.DEPIN.maxLength} characters`,
+        name
+      );
+    }
+
+    const parts = name.split(ASSET_NAME_RULES.DEPIN.separator);
+    if (parts.length === 0) {
+      throw new InvalidAssetNameError('DEPIN asset name is invalid', name);
+    }
+
+    const rootPart = parts[0].substring(1);
+    if (rootPart.length < ASSET_NAME_RULES.DEPIN.minLength) {
+      throw new InvalidAssetNameError(
+        `DEPIN root name must be at least ${ASSET_NAME_RULES.DEPIN.minLength} characters`,
+        name
+      );
+    }
+
+    if (rootPart !== rootPart.toUpperCase()) {
+      throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);
+    }
+
+    if (!ASSET_NAME_RULES.DEPIN.pattern.test(rootPart)) {
+      throw new InvalidAssetNameError(
+        'DEPIN asset name can only contain A-Z, 0-9, underscore, and period',
+        name
+      );
+    }
+
+    const subParts = parts.slice(1);
+    subParts.forEach(part => {
+      if (part.length < ASSET_NAME_RULES.DEPIN.minLength) {
+        throw new InvalidAssetNameError(
+          `Each DEPIN sub-part must be at least ${ASSET_NAME_RULES.DEPIN.minLength} characters`,
+          name
+        );
+      }
+
+      if (part !== part.toUpperCase()) {
+        throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);
+      }
+
+      if (!ASSET_NAME_RULES.DEPIN.pattern.test(part)) {
+        throw new InvalidAssetNameError(
+          'DEPIN asset name can only contain A-Z, 0-9, underscore, and period',
+          name
+        );
+      }
+    });
+
+    return true;
+  }
+
+  /**
    * Validate owner token name
    * Format: ASSETNAME!
    */
@@ -255,9 +326,11 @@ class AssetNameValidator {
 
     const assetName = name.substring(0, name.length - 1);
 
-    // Validate the asset name part (could be ROOT or RESTRICTED)
+    // Validate the asset name part (could be ROOT, RESTRICTED, or DEPIN)
     if (assetName.startsWith('$')) {
       this.validateRestricted(assetName);
+    } else if (assetName.startsWith('&')) {
+      this.validateDepin(assetName);
     } else {
       this.validateRoot(assetName);
     }
@@ -268,7 +341,7 @@ class AssetNameValidator {
   /**
    * Auto-detect asset type and validate
    * @param {string} name - Asset name
-   * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'OWNER')
+   * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'DEPIN', 'OWNER')
    */
   static validateAndDetectType(name) {
     if (name.endsWith('!')) {
@@ -280,6 +353,9 @@ class AssetNameValidator {
     } else if (name.startsWith('$')) {
       this.validateRestricted(name);
       return 'RESTRICTED';
+    } else if (name.startsWith('&')) {
+      this.validateDepin(name);
+      return 'DEPIN';
     } else if (name.includes('#')) {
       this.validateUnique(name);
       return 'UNIQUE';

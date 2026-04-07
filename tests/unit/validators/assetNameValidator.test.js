@@ -172,10 +172,34 @@ describe('AssetNameValidator', () => {
     });
   });
 
+  describe('validateDepin', () => {
+    it('should validate correct DEPIN asset names', () => {
+      expect(AssetNameValidator.validateDepin('&FRANCE')).to.be.true;
+      expect(AssetNameValidator.validateDepin('&FRANCE/PARIS')).to.be.true;
+      expect(AssetNameValidator.validateDepin('&NODE_1')).to.be.true;
+    });
+
+    it('should reject names without & prefix', () => {
+      expect(() => AssetNameValidator.validateDepin('FRANCE'))
+        .to.throw(InvalidAssetNameError, 'must start with &');
+    });
+
+    it('should reject lowercase depin names', () => {
+      expect(() => AssetNameValidator.validateDepin('&france'))
+        .to.throw(InvalidAssetNameError, 'must be uppercase');
+    });
+
+    it('should reject depin sub-parts shorter than 3 characters', () => {
+      expect(() => AssetNameValidator.validateDepin('&FRANCE/AB'))
+        .to.throw(InvalidAssetNameError, 'Each DEPIN sub-part must be at least 3 characters');
+    });
+  });
+
   describe('validateOwnerToken', () => {
     it('should validate correct owner token names', () => {
       expect(AssetNameValidator.validateOwnerToken('MYTOKEN!')).to.be.true;
       expect(AssetNameValidator.validateOwnerToken('$SECURITY!')).to.be.true;
+      expect(AssetNameValidator.validateOwnerToken('&FRANCE!')).to.be.true;
     });
 
     it('should reject names without ! suffix', () => {
@@ -218,6 +242,11 @@ describe('AssetNameValidator', () => {
     it('should detect and validate RESTRICTED assets', () => {
       const type = AssetNameValidator.validateAndDetectType('$SECURITY');
       expect(type).to.equal('RESTRICTED');
+    });
+
+    it('should detect and validate DEPIN assets', () => {
+      const type = AssetNameValidator.validateAndDetectType('&FRANCE/PARIS');
+      expect(type).to.equal('DEPIN');
     });
 
     it('should detect and validate OWNER tokens', () => {

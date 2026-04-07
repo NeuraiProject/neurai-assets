@@ -116,6 +116,11 @@ describe('NeuraiAssets', () => {
       expect(type).to.equal('RESTRICTED');
     });
 
+    it('should detect DEPIN asset type', () => {
+      const type = assets.getAssetType('&FRANCE/PARIS');
+      expect(type).to.equal('DEPIN');
+    });
+
     it('should detect OWNER token type', () => {
       const type = assets.getAssetType('MYTOKEN!');
       expect(type).to.equal('OWNER');
@@ -165,12 +170,31 @@ describe('NeuraiAssets', () => {
       const result = await testAssets.assetExists('MYTOKEN');
       expect(result).to.exist;
     });
+
+    it('should call listDepinHolders', async () => {
+      const holders = [{ address: 't1...', amount: 1, valid: 1 }];
+      const rpcMock = createMockRPC({ 'listdepinholders': holders });
+      const testAssets = new NeuraiAssets(rpcMock);
+
+      const result = await testAssets.listDepinHolders('&FRANCE');
+      expect(result).to.deep.equal(holders);
+    });
+
+    it('should call checkDepinValidity', async () => {
+      const validity = { has_asset: true, amount: 1, valid: 1, blocked: false };
+      const rpcMock = createMockRPC({ 'checkdepinvalidity': validity });
+      const testAssets = new NeuraiAssets(rpcMock);
+
+      const result = await testAssets.checkDepinValidity('&FRANCE', 't1...');
+      expect(result).to.deep.equal(validity);
+    });
   });
 
   describe('Method Availability', () => {
     it('should have all ROOT asset methods', () => {
       expect(assets.createRootAsset).to.be.a('function');
       expect(assets.createSubAsset).to.be.a('function');
+      expect(assets.createDepinAsset).to.be.a('function');
       expect(assets.reissueAsset).to.be.a('function');
     });
 
@@ -209,6 +233,8 @@ describe('NeuraiAssets', () => {
       expect(assets.isValidVerifierString).to.be.a('function');
       expect(assets.getSnapshotRequest).to.be.a('function');
       expect(assets.cancelSnapshotRequest).to.be.a('function');
+      expect(assets.listDepinHolders).to.be.a('function');
+      expect(assets.checkDepinValidity).to.be.a('function');
       expect(assets.assetExists).to.be.a('function');
       expect(assets.getAssetType).to.be.a('function');
       expect(assets.getAssetCount).to.be.a('function');

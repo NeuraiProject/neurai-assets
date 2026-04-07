@@ -3,6 +3,21 @@
  * Different addresses for mainnet and testnet
  */
 
+const MAINNET_NETWORKS = ['xna', 'mainnet', 'xna-pq', 'mainnet-pq'];
+const TESTNET_NETWORKS = ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq'];
+
+function resolveNetworkFamily(network) {
+  if (MAINNET_NETWORKS.includes(network)) {
+    return 'mainnet';
+  }
+
+  if (TESTNET_NETWORKS.includes(network)) {
+    return 'testnet';
+  }
+
+  throw new Error(`Unknown network: ${network}`);
+}
+
 const MAINNET_BURN_ADDRESSES = {
   ISSUE_ROOT: 'NbURNXXXXXXXXXXXXXXXXXXXXXXXT65Gdr',
   ISSUE_SUB: 'NXissueSubAssetXXXXXXXXXXXXXX6B2JF',
@@ -32,11 +47,12 @@ const TESTNET_BURN_ADDRESSES = {
 /**
  * Get burn address for an operation and network
  * @param {string} operationType - Operation type (e.g., 'ISSUE_ROOT')
- * @param {string} network - Network type ('xna' or 'xna-test')
+ * @param {string} network - Network type ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
  * @returns {string} Burn address
  */
 function getBurnAddress(operationType, network) {
-  const addresses = network === 'xna' ? MAINNET_BURN_ADDRESSES : TESTNET_BURN_ADDRESSES;
+  const family = resolveNetworkFamily(network);
+  const addresses = family === 'mainnet' ? MAINNET_BURN_ADDRESSES : TESTNET_BURN_ADDRESSES;
 
   const address = addresses[operationType];
   if (!address) {
@@ -49,17 +65,19 @@ function getBurnAddress(operationType, network) {
 /**
  * Check if an address is a burn address
  * @param {string} address - Address to check
- * @param {string} network - Network type ('xna' or 'xna-test')
+ * @param {string} network - Network type ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
  * @returns {boolean} True if it's a burn address
  */
 function isBurnAddress(address, network) {
-  const addresses = network === 'xna' ? MAINNET_BURN_ADDRESSES : TESTNET_BURN_ADDRESSES;
+  const family = resolveNetworkFamily(network);
+  const addresses = family === 'mainnet' ? MAINNET_BURN_ADDRESSES : TESTNET_BURN_ADDRESSES;
   return Object.values(addresses).includes(address);
 }
 
 module.exports = {
   MAINNET_BURN_ADDRESSES,
   TESTNET_BURN_ADDRESSES,
+  resolveNetworkFamily,
   getBurnAddress,
   isBurnAddress
 };

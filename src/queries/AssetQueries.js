@@ -388,6 +388,53 @@ class AssetQueries {
   }
 
   /**
+   * List DEPIN holders with validity status
+   * @param {string} assetName - DEPIN asset name
+   * @returns {Promise<Array>} Array of holder objects
+   */
+  async listDepinHolders(assetName) {
+    if (!assetName) {
+      throw new Error('DEPIN asset name is required');
+    }
+
+    try {
+      const result = await this.rpc('listdepinholders', [assetName]);
+      return result || [];
+    } catch (error) {
+      if (error.message && error.message.includes('not found')) {
+        throw new AssetNotFoundError(
+          `DEPIN asset ${assetName} not found on blockchain`,
+          assetName
+        );
+      }
+      throw new Error(`Failed to list DEPIN holders: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check DEPIN validity for a specific address
+   * @param {string} assetName - DEPIN asset name
+   * @param {string} address - Address to query
+   * @returns {Promise<object>} Validity information
+   */
+  async checkDepinValidity(assetName, address) {
+    if (!assetName) {
+      throw new Error('DEPIN asset name is required');
+    }
+
+    if (!address) {
+      throw new Error('Address is required');
+    }
+
+    try {
+      const result = await this.rpc('checkdepinvalidity', [assetName, address]);
+      return result || { has_asset: false };
+    } catch (error) {
+      throw new Error(`Failed to check DEPIN validity: ${error.message}`);
+    }
+  }
+
+  /**
    * Get total count of assets on blockchain
    * @returns {Promise<number>} Total asset count
    */
@@ -421,7 +468,7 @@ class AssetQueries {
   /**
    * Get asset type from name
    * @param {string} assetName - Asset name
-   * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'OWNER')
+   * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'DEPIN', 'OWNER')
    */
   getAssetType(assetName) {
     if (!assetName) {
@@ -434,6 +481,8 @@ class AssetQueries {
       return assetName.includes('/') ? 'SUB_QUALIFIER' : 'QUALIFIER';
     } else if (assetName.startsWith('$')) {
       return 'RESTRICTED';
+    } else if (assetName.startsWith('&')) {
+      return 'DEPIN';
     } else if (assetName.includes('#')) {
       return 'UNIQUE';
     } else if (assetName.includes('/')) {

@@ -103,6 +103,7 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     const addresses = await this._getAddresses();
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
+    const isDepinAsset = AssetNameParser.isDepin(assetName);
 
     // 6. Find owner token (CRITICAL: must have this)
     const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
@@ -201,7 +202,7 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
       asset_quantity: this.toSatoshis(quantity, units),
       reissuable: reissuable !== undefined ? reissuable : undefined,
       new_ipfs: newIpfs || undefined,
-      owner_change_address: changeAddress
+      owner_change_address: isDepinAsset ? toAddress : changeAddress
     });
 
     outputs.push({ [toAddress]: reissueOutput });

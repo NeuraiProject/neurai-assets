@@ -55,6 +55,18 @@ describe('Integration: Asset Lifecycle', () => {
       expect(parsed.isRestricted).to.be.true;
       expect(parsed.prefix).to.equal('$');
     });
+
+    it('should validate and parse DEPIN assets correctly', () => {
+      const assetName = '&FRANCE/PARIS';
+
+      expect(AssetNameValidator.validateDepin(assetName)).to.be.true;
+
+      const parsed = AssetNameParser.parse(assetName);
+      expect(parsed.type).to.equal(12);
+      expect(parsed.isDepin).to.be.true;
+      expect(parsed.parent).to.equal('&FRANCE');
+      expect(parsed.subName).to.equal('PARIS');
+    });
   });
 
   describe('Amount Conversion Integration', () => {
@@ -134,6 +146,7 @@ describe('Integration: Asset Lifecycle', () => {
         { name: 'MYTOKEN#NFT', expected: 'UNIQUE' },
         { name: '#KYC', expected: 'QUALIFIER' },
         { name: '$SECURITY', expected: 'RESTRICTED' },
+        { name: '&FRANCE/PARIS', expected: 'DEPIN' },
         { name: 'MYTOKEN!', expected: 'OWNER' }
       ];
 
@@ -209,6 +222,20 @@ describe('Integration: Asset Lifecycle', () => {
       const parsed = AssetNameParser.parse(qualifierName);
       expect(parsed.type).to.equal(4);
       expect(parsed.isQualifier).to.be.true;
+    });
+
+    it('should handle depin workflow', () => {
+      const depinName = '&FRANCE/PARIS';
+
+      expect(AssetNameValidator.validateDepin(depinName)).to.be.true;
+      expect(AssetNameParser.isDepin(depinName)).to.be.true;
+
+      const ownerToken = AssetNameParser.getOwnerTokenName(depinName);
+      expect(ownerToken).to.equal('&FRANCE/PARIS!');
+
+      const parsed = AssetNameParser.parse(depinName);
+      expect(parsed.type).to.equal(12);
+      expect(parsed.parent).to.equal('&FRANCE');
     });
   });
 

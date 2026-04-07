@@ -225,6 +225,9 @@ class BaseAssetTransactionBuilder {
       case 'RESTRICTED':
         AssetNameValidator.validateRestricted(assetName);
         break;
+      case 'DEPIN':
+        AssetNameValidator.validateDepin(assetName);
+        break;
       default:
         throw new Error(`Unknown asset type: ${type}`);
     }

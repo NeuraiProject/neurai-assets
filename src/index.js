@@ -9,6 +9,7 @@
  * - UNIQUE assets (NFTs)
  * - QUALIFIER assets (KYC/compliance tags)
  * - RESTRICTED assets (security tokens with compliance)
+ * - DEPIN assets (soulbound assets)
  *
  * @example
  * const NeuraiAssets = require('@neuraiproject/neurai-assets');

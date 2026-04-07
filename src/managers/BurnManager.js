@@ -80,6 +80,15 @@ class BurnManager {
   }
 
   /**
+   * Get burn info for DEPIN asset issuance
+   * DEPIN assets reuse the UNIQUE burn amount/address.
+   * @returns {object} { address, amount }
+   */
+  getIssueDepinBurn() {
+    return this.getIssueUniqueBurn(1);
+  }
+
+  /**
    * Get burn info for QUALIFIER asset issuance
    * @returns {object} { address, amount }
    */

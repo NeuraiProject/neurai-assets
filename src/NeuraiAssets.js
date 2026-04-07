@@ -25,6 +25,7 @@ const { AssetQueries } = require('./queries');
 const {
   IssueRootBuilder,
   IssueSubBuilder,
+  IssueDepinBuilder,
   IssueUniqueBuilder,
   IssueQualifierBuilder,
   IssueRestrictedBuilder,
@@ -116,6 +117,21 @@ class NeuraiAssets {
    */
   async createSubAsset(params) {
     const builder = new IssueSubBuilder(this.rpc, this._buildParams(params));
+    return await builder.build();
+  }
+
+  /**
+   * Create a DEPIN asset
+   * @param {object} params - DEPIN creation parameters
+   * @param {string} params.assetName - Asset name (&NAME or &NAME/SUB)
+   * @param {number} params.quantity - Total supply
+   * @param {boolean} [params.reissuable=true] - Can mint more later
+   * @param {boolean} [params.hasIpfs=false] - Has IPFS metadata
+   * @param {string} [params.ipfsHash] - IPFS hash
+   * @returns {Promise<object>} Transaction data
+   */
+  async createDepinAsset(params) {
+    const builder = new IssueDepinBuilder(this.rpc, this._buildParams(params));
     return await builder.build();
   }
 
@@ -440,6 +456,25 @@ class NeuraiAssets {
   }
 
   /**
+   * List DEPIN holders with validity status
+   * @param {string} assetName - DEPIN asset name
+   * @returns {Promise<Array>} Holder entries
+   */
+  async listDepinHolders(assetName) {
+    return await this.queries.listDepinHolders(assetName);
+  }
+
+  /**
+   * Check DEPIN validity for an address
+   * @param {string} assetName - DEPIN asset name
+   * @param {string} address - Address to query
+   * @returns {Promise<object>} Validity details
+   */
+  async checkDepinValidity(assetName, address) {
+    return await this.queries.checkDepinValidity(assetName, address);
+  }
+
+  /**
    * Check if asset exists
    * @param {string} assetName - Asset name
    * @returns {Promise<boolean>} True if asset exists
@@ -451,7 +486,7 @@ class NeuraiAssets {
   /**
    * Get asset type from name
    * @param {string} assetName - Asset name
-   * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'OWNER')
+   * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'DEPIN', 'OWNER')
    */
   getAssetType(assetName) {
     return this.queries.getAssetType(assetName);
