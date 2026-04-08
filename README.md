@@ -30,6 +30,37 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 npm install @neuraiproject/neurai-assets
 ```
 
+## Package Outputs
+
+The package now publishes explicit entry points for each runtime:
+
+- `@neuraiproject/neurai-assets`: main ESM/CJS library entry
+- `@neuraiproject/neurai-assets/browser`: browser-focused ESM entry
+- `@neuraiproject/neurai-assets/global`: IIFE bundle for `<script src>`
+
+### ESM
+
+```javascript
+import NeuraiAssets from '@neuraiproject/neurai-assets';
+```
+
+### Browser ESM
+
+```javascript
+import NeuraiAssets from '@neuraiproject/neurai-assets/browser';
+```
+
+### Classic HTML
+
+```html
+<script src="./node_modules/@neuraiproject/neurai-assets/dist/NeuraiAssets.global.js"></script>
+<script>
+  const assets = new globalThis.NeuraiAssets(rpc, {
+    network: 'xna'
+  });
+</script>
+```
+
 ## Basic Usage
 
 ```javascript

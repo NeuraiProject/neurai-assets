@@ -1,12 +1,35 @@
 {
   "name": "@neuraiproject/neurai-assets",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Non-custodial Neurai asset management library for JavaScript",
-  "main": "./src/index.js",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "browser": "./dist/browser.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./browser": {
+      "types": "./index.d.ts",
+      "import": "./dist/browser.js"
+    },
+    "./global": "./dist/NeuraiAssets.global.js"
+  },
+  "files": [
+    "dist",
+    "index.d.ts",
+    "README.md"
+  ],
   "scripts": {
-    "test": "mocha ./tests/unit/**/*.test.js ./tests/integration/**/*.test.js",
+    "build": "rollup -c rollup.config.mjs",
+    "test": "npm run build && mocha ./tests/unit/**/*.test.js ./tests/integration/**/*.test.js ./tests/browser/**/*.test.js",
     "test:unit": "mocha ./tests/unit/**/*.test.js",
     "test:integration": "mocha ./tests/integration/**/*.test.js",
+    "test:browser": "npm run build && mocha ./tests/browser/**/*.test.js",
     "test:watch": "mocha --watch ./tests/**/*.test.js"
   },
   "repository": {
@@ -30,8 +53,11 @@
     "access": "public"
   },
   "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.8",
+    "@rollup/plugin-node-resolve": "^16.0.3",
     "chai": "^4.3.10",
-    "mocha": "^11.7.5"
+    "mocha": "^11.7.5",
+    "rollup": "^4.52.4"
   },
   "overrides": {
     "diff": "8.0.4",
