@@ -230,7 +230,23 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
         newTotalSupply,
         previousSupply: currentSupply,
         reissuableLocked: reissuable === false,
-        operationType: 'REISSUE'
+        operationType: 'REISSUE',
+        localRawBuild: this.buildLocalRawBuild(
+          'REISSUE',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, units),
+            units,
+            reissuable: reissuable !== undefined ? reissuable : undefined,
+            ipfsHash: newIpfs || undefined,
+            ownerChangeAddress: isDepinAsset ? toAddress : changeAddress
+          }
+        )
       }
     );
   }

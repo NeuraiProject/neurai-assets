@@ -228,7 +228,23 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
         parentAssetName,
         ownerTokenName: assetName + '!',
         parentOwnerTokenUsed: ownerTokenName,
-        operationType: 'ISSUE_SUB'
+        operationType: 'ISSUE_SUB',
+        localRawBuild: this.buildLocalRawBuild(
+          'ISSUE_SUB',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, units),
+            units,
+            reissuable,
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            parentOwnerAddress: changeAddress
+          }
+        )
       }
     );
   }

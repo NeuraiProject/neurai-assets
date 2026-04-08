@@ -39,7 +39,7 @@ class BaseAssetTransactionBuilder {
       addresses === undefined
     ) {
       network = networkOrParams.network;
-      actualAddresses = networkOrParams.addresses;
+      actualAddresses = networkOrParams.walletAddresses || networkOrParams.addresses;
       actualParams = networkOrParams;
     } else {
       network = networkOrParams;
@@ -263,6 +263,142 @@ class BaseAssetTransactionBuilder {
   }
 
   /**
+   * Normalize builder inputs to raw transaction inputs
+   * @param {Array} inputs - Builder inputs
+   * @returns {Array<{txid: string, vout: number}>} Raw transaction inputs
+   */
+  toRawTxInputs(inputs) {
+    return (inputs || []).map(input => ({
+      txid: input.txid,
+      vout: input.vout !== undefined ? input.vout : input.outputIndex
+    }));
+  }
+
+  /**
+   * Convert XNA amount to satoshis
+   * @param {number|null|undefined} amount - Amount in XNA
+   * @returns {number|undefined} Amount in satoshis
+   */
+  xnaToSatoshis(amount) {
+    if (amount === undefined || amount === null) {
+      return undefined;
+    }
+
+    return Math.round(amount * 100000000);
+  }
+
+  /**
+   * Build a typed local raw build payload compatible with
+   * @neuraiproject/neurai-create-transaction createFromOperation(...)
+   *
+   * @param {string} operationType - Operation type
+   * @param {Array} inputs - Builder inputs
+   * @param {object|null} burnInfo - Burn metadata
+   * @param {string|null} changeAddress - XNA change address
+   * @param {number|null} changeAmount - XNA change amount in XNA
+   * @param {object} operationParams - Operation-specific params
+   * @returns {{ operationType: string, params: object }} Local raw build
+   */
+  buildLocalRawBuild(
+    operationType,
+    inputs,
+    burnInfo = null,
+    changeAddress = null,
+    changeAmount = null,
+    operationParams = {}
+  ) {
+    const params = {
+      inputs: this.toRawTxInputs(inputs),
+      ...operationParams
+    };
+
+    if (burnInfo && burnInfo.address && burnInfo.amount !== undefined && burnInfo.amount !== null) {
+      params.burnAddress = burnInfo.address;
+      params.burnAmountSats = this.xnaToSatoshis(burnInfo.amount);
+    }
+
+    if (changeAddress && changeAmount !== undefined && changeAmount !== null) {
+      params.xnaChangeAddress = changeAddress;
+      params.xnaChangeSats = this.xnaToSatoshis(changeAmount);
+    }
+
+    return {
+      operationType,
+      params
+    };
+  }
+
+  /**
+   * Normalize ordered outputs into flat entries
+   * @param {Array|object} outputs - Transaction outputs
+   * @returns {Array<{address: string, value: unknown}>} Output entries
+   */
+  getOutputEntries(outputs) {
+    if (Array.isArray(outputs)) {
+      return outputs.map(output => {
+        const [address, value] = Object.entries(output)[0];
+        return { address, value };
+      });
+    }
+
+    if (outputs && typeof outputs === 'object') {
+      return Object.entries(outputs).map(([address, value]) => ({ address, value }));
+    }
+
+    return [];
+  }
+
+  /**
+   * Extract burn metadata from outputs
+   * @param {Array<{address: string, value: unknown}>} entries - Output entries
+   * @param {number} burnAmount - Burn amount in XNA
+   * @returns {{ burnAddress: string|null, burnAmount: number }}
+   */
+  extractBurnMetadata(entries, burnAmount) {
+    if (!burnAmount || burnAmount <= 0) {
+      return {
+        burnAddress: null,
+        burnAmount: 0
+      };
+    }
+
+    const burnEntry = entries.find(({ address, value }) => {
+      return typeof value === 'number' &&
+        value === burnAmount &&
+        this.burnManager.isBurnAddress(address);
+    });
+
+    return {
+      burnAddress: burnEntry ? burnEntry.address : null,
+      burnAmount
+    };
+  }
+
+  /**
+   * Extract XNA change metadata from outputs
+   * @param {Array<{address: string, value: unknown}>} entries - Output entries
+   * @param {string|null} burnAddress - Burn address if present
+   * @returns {{ changeAddress: string|null, changeAmount: number|null }}
+   */
+  extractChangeMetadata(entries, burnAddress = null) {
+    const xnaOutputs = entries.filter(({ address, value }) => {
+      return typeof value === 'number' && address !== burnAddress;
+    });
+
+    if (xnaOutputs.length !== 1) {
+      return {
+        changeAddress: null,
+        changeAmount: null
+      };
+    }
+
+    return {
+      changeAddress: xnaOutputs[0].address,
+      changeAmount: xnaOutputs[0].value
+    };
+  }
+
+  /**
    * Format transaction result
    * @param {string} rawTx - Raw transaction hex
    * @param {Array} utxos - UTXOs used
@@ -274,13 +410,26 @@ class BaseAssetTransactionBuilder {
    * @returns {object} Formatted result
    */
   formatResult(rawTx, utxos, inputs, outputs, fee, burnAmount, extra = {}) {
+    const outputEntries = this.getOutputEntries(outputs);
+    const burnMetadata = this.extractBurnMetadata(outputEntries, burnAmount);
+    const changeMetadata = this.extractChangeMetadata(outputEntries, burnMetadata.burnAddress);
+
     return {
       rawTx,
       utxos,
       inputs,
       outputs,
       fee,
-      burnAmount,
+      burnAmount: burnMetadata.burnAmount,
+      network: this.network,
+      buildStrategy: 'rpc-node',
+      burnAddress: burnMetadata.burnAddress,
+      changeAddress: extra.changeAddress !== undefined
+        ? extra.changeAddress
+        : changeMetadata.changeAddress,
+      changeAmount: extra.changeAmount !== undefined
+        ? extra.changeAmount
+        : changeMetadata.changeAmount,
       ...extra
     };
   }

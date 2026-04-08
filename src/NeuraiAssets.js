@@ -78,7 +78,7 @@ class NeuraiAssets {
     return {
       ...params,
       network: this.config.network,
-      addresses: this.config.addresses,
+      walletAddresses: this.config.addresses,
       changeAddress: params.changeAddress || this.config.changeAddress,
       toAddress: params.toAddress || this.config.toAddress
     };

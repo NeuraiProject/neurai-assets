@@ -227,7 +227,24 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
         qualifierType: isSub ? 'SUB_QUALIFIER' : 'QUALIFIER',
         parentQualifier: isSub ? parsed.parent : null,
         parentQualifierUsed: parentQualifierName,
-        operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER'
+        operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
+        localRawBuild: this.buildLocalRawBuild(
+          isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, 0),
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            rootChangeAddress: isSub ? changeAddress : undefined,
+            changeQuantityRaw: isSub && parentQualifierQuantity !== null
+              ? this.toSatoshis(parentQualifierQuantity, 0)
+              : undefined
+          }
+        )
       }
     );
   }

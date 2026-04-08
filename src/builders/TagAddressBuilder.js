@@ -205,7 +205,20 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
         qualifierAssetUsed: qualifierName,
         targetAddresses,
         addressCount,
-        operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES'
+        operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
+        localRawBuild: this.buildLocalRawBuild(
+          isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            qualifierName,
+            targetAddresses,
+            qualifierChangeAddress: changeAddress,
+            qualifierChangeAmountRaw: this.toSatoshis(qualifierQuantity, 0)
+          }
+        )
       }
     );
   }

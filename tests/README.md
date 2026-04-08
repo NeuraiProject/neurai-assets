@@ -1,126 +1,135 @@
-# Tests para @neuraiproject/neurai-assets
+# Tests for `@neuraiproject/neurai-assets`
 
-Esta carpeta contiene la suite completa de tests para la librería de gestión de activos de Neurai.
+This folder contains the test suite for the Neurai asset management library.
 
-## Estructura de Tests
+## Test Structure
 
-```
+```text
 tests/
-├── mocks/              # Mocks para RPC y dependencias
-│   └── rpcMock.js     # Mock del RPC de Neurai
-├── unit/              # Tests unitarios
-│   ├── validators/    # Tests para validadores
-│   ├── utils/         # Tests para utilidades
-│   └── NeuraiAssets.test.js  # Tests de la clase principal
-└── integration/       # Tests de integración
-    └── assetLifecycle.test.js  # Tests del ciclo de vida completo
+├── mocks/                    # RPC and dependency mocks
+│   └── rpcMock.js            # Neurai RPC mock
+├── unit/                     # Unit tests
+│   ├── builders/             # Build-result and compatibility tests
+│   ├── validators/           # Validator tests
+│   ├── utils/                # Utility tests
+│   └── NeuraiAssets.test.js  # Main class tests
+├── integration/              # Integration tests
+│   └── assetLifecycle.test.js
+└── browser/                  # Browser bundle tests
+    └── globalBundle.test.js
 ```
 
-## Ejecutar Tests
+## Running Tests
 
-### Todos los tests
+### All tests
+
 ```bash
 npm test
 ```
 
-### Solo tests unitarios
+### Unit tests only
+
 ```bash
 npm run test:unit
 ```
 
-### Solo tests de integración
+### Integration tests only
+
 ```bash
 npm run test:integration
 ```
 
-### Tests en modo watch (re-ejecuta al guardar cambios)
+### Browser tests only
+
+```bash
+npm run test:browser
+```
+
+### Watch mode
+
 ```bash
 npm run test:watch
 ```
 
-## Cobertura de Tests
+## Test Coverage
 
-### Validators (Validadores)
-- **assetNameValidator.test.js**: Valida nombres de activos ROOT, SUB, UNIQUE, QUALIFIER, RESTRICTED y OWNER
-- **amountValidator.test.js**: Valida cantidades, unidades y rangos de activos
+### Validators
 
-### Utils (Utilidades)
-- **assetNameParser.test.js**: Prueba el parsing y detección de tipos de activos
-- **amountConverter.test.js**: Prueba conversiones entre cantidades y satoshis
+- `assetNameValidator.test.js`: validates ROOT, SUB, UNIQUE, QUALIFIER, RESTRICTED, DEPIN, and OWNER asset names
+- `amountValidator.test.js`: validates asset quantities, units, and ranges
 
-### Clase Principal
-- **NeuraiAssets.test.js**: Prueba la clase principal y sus métodos
+### Utils
 
-### Integración
-- **assetLifecycle.test.js**: Prueba workflows completos de creación y gestión de activos
+- `assetNameParser.test.js`: covers parsing and asset-type detection
+- `amountConverter.test.js`: covers conversions between logical amounts and satoshis
+- `networkDetector.test.js`: covers network detection and burn-address mapping
 
-## Tests Actuales
+### Builders
 
-Total: **124 tests pasando**
+- `buildResultMetadata.test.js`: verifies explicit build metadata such as burn and change outputs
+- `localRawBuildCompatibility.test.js`: verifies compatibility with `@neuraiproject/neurai-create-transaction`
 
-### Desglose por módulo:
-- AmountConverter: 24 tests
-- AssetNameParser: 29 tests
-- AmountValidator: 21 tests
-- AssetNameValidator: 33 tests
-- NeuraiAssets: 10 tests
-- Integration Tests: 7 tests
+### Main Class
 
-## Mocks Disponibles
+- `NeuraiAssets.test.js`: covers the main class and its public methods
 
-### RPCMock
-Mock flexible del RPC de Neurai que permite:
-- Configurar respuestas personalizadas para métodos específicos
-- Rastrear llamadas realizadas
-- Simular errores y casos edge
+### Integration
+
+- `assetLifecycle.test.js`: covers end-to-end asset lifecycle workflows
+
+### Browser
+
+- `globalBundle.test.js`: verifies the browser/global bundle entry points
+
+## Available Mocks
+
+### `RPCMock`
+
+Flexible Neurai RPC mock that supports:
+
+- custom responses for specific RPC methods
+- call-history tracking
+- error and edge-case simulation
 
 ```javascript
 const { createMockRPC, createMockUTXO, createMockAssetData } = require('./mocks/rpcMock');
 
-// Crear mock con respuestas personalizadas
 const mockRPC = createMockRPC({
-  'getassetdata': { name: 'MYTOKEN', amount: 1000000 }
+  getassetdata: { name: 'MYTOKEN', amount: 1000000 }
 });
 
-// Usar en tests
 const assets = new NeuraiAssets(mockRPC);
 ```
 
-## Agregar Nuevos Tests
+## Adding New Tests
 
-Para agregar nuevos tests:
-
-1. **Tests unitarios**: Coloca el archivo en `tests/unit/[modulo]/`
-2. **Tests de integración**: Coloca el archivo en `tests/integration/`
-3. **Nombra el archivo**: `*.test.js` para que Mocha lo detecte automáticamente
-4. **Usa la estructura estándar**:
+1. Put unit tests in `tests/unit/`.
+2. Put integration tests in `tests/integration/`.
+3. Put browser-specific tests in `tests/browser/` when needed.
+4. Use the `*.test.js` naming pattern so Mocha picks them up automatically.
+5. Follow the standard structure:
 
 ```javascript
 const { expect } = require('chai');
 
-describe('NombreDelModulo', () => {
-  describe('nombreDelMetodo', () => {
-    it('debería hacer algo específico', () => {
-      // Arrange
-      const input = 'valor';
-
-      // Act
+describe('ModuleName', () => {
+  describe('methodName', () => {
+    it('should do something specific', () => {
+      const input = 'value';
       const result = someFunction(input);
-
-      // Assert
-      expect(result).to.equal('esperado');
+      expect(result).to.equal('expected');
     });
   });
 });
 ```
 
-## Frameworks Utilizados
+## Testing Stack
 
-- **Mocha**: Framework de testing
-- **Chai**: Librería de assertions (expect)
+- `Mocha`: test runner
+- `Chai`: assertions
 
-## Notas
+## Notes
 
-- Los tests no requieren conexión a un nodo Neurai real
-- Todos los tests usan mocks para simular llamadas RPC
-- Los tests verifican tanto casos exitosos como errores esperados
+- Tests do not require a live Neurai node.
+- RPC interactions are mocked.
+- The suite covers both successful flows and expected failures.

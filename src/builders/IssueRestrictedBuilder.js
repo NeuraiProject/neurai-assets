@@ -212,7 +212,24 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
         ownerTokenName,
         verifierString,
         requiredQualifiers,
-        operationType: 'ISSUE_RESTRICTED'
+        operationType: 'ISSUE_RESTRICTED',
+        localRawBuild: this.buildLocalRawBuild(
+          'ISSUE_RESTRICTED',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, units),
+            verifierString,
+            units,
+            reissuable,
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            ownerChangeAddress: changeAddress
+          }
+        )
       }
     );
   }

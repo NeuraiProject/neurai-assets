@@ -4173,7 +4173,7 @@ function requireBaseAssetTransactionBuilder () {
 	      addresses === undefined
 	    ) {
 	      network = networkOrParams.network;
-	      actualAddresses = networkOrParams.addresses;
+	      actualAddresses = networkOrParams.walletAddresses || networkOrParams.addresses;
 	      actualParams = networkOrParams;
 	    } else {
 	      network = networkOrParams;
@@ -4397,6 +4397,142 @@ function requireBaseAssetTransactionBuilder () {
 	  }
 
 	  /**
+	   * Normalize builder inputs to raw transaction inputs
+	   * @param {Array} inputs - Builder inputs
+	   * @returns {Array<{txid: string, vout: number}>} Raw transaction inputs
+	   */
+	  toRawTxInputs(inputs) {
+	    return (inputs || []).map(input => ({
+	      txid: input.txid,
+	      vout: input.vout !== undefined ? input.vout : input.outputIndex
+	    }));
+	  }
+
+	  /**
+	   * Convert XNA amount to satoshis
+	   * @param {number|null|undefined} amount - Amount in XNA
+	   * @returns {number|undefined} Amount in satoshis
+	   */
+	  xnaToSatoshis(amount) {
+	    if (amount === undefined || amount === null) {
+	      return undefined;
+	    }
+
+	    return Math.round(amount * 100000000);
+	  }
+
+	  /**
+	   * Build a typed local raw build payload compatible with
+	   * @neuraiproject/neurai-create-transaction createFromOperation(...)
+	   *
+	   * @param {string} operationType - Operation type
+	   * @param {Array} inputs - Builder inputs
+	   * @param {object|null} burnInfo - Burn metadata
+	   * @param {string|null} changeAddress - XNA change address
+	   * @param {number|null} changeAmount - XNA change amount in XNA
+	   * @param {object} operationParams - Operation-specific params
+	   * @returns {{ operationType: string, params: object }} Local raw build
+	   */
+	  buildLocalRawBuild(
+	    operationType,
+	    inputs,
+	    burnInfo = null,
+	    changeAddress = null,
+	    changeAmount = null,
+	    operationParams = {}
+	  ) {
+	    const params = {
+	      inputs: this.toRawTxInputs(inputs),
+	      ...operationParams
+	    };
+
+	    if (burnInfo && burnInfo.address && burnInfo.amount !== undefined && burnInfo.amount !== null) {
+	      params.burnAddress = burnInfo.address;
+	      params.burnAmountSats = this.xnaToSatoshis(burnInfo.amount);
+	    }
+
+	    if (changeAddress && changeAmount !== undefined && changeAmount !== null) {
+	      params.xnaChangeAddress = changeAddress;
+	      params.xnaChangeSats = this.xnaToSatoshis(changeAmount);
+	    }
+
+	    return {
+	      operationType,
+	      params
+	    };
+	  }
+
+	  /**
+	   * Normalize ordered outputs into flat entries
+	   * @param {Array|object} outputs - Transaction outputs
+	   * @returns {Array<{address: string, value: unknown}>} Output entries
+	   */
+	  getOutputEntries(outputs) {
+	    if (Array.isArray(outputs)) {
+	      return outputs.map(output => {
+	        const [address, value] = Object.entries(output)[0];
+	        return { address, value };
+	      });
+	    }
+
+	    if (outputs && typeof outputs === 'object') {
+	      return Object.entries(outputs).map(([address, value]) => ({ address, value }));
+	    }
+
+	    return [];
+	  }
+
+	  /**
+	   * Extract burn metadata from outputs
+	   * @param {Array<{address: string, value: unknown}>} entries - Output entries
+	   * @param {number} burnAmount - Burn amount in XNA
+	   * @returns {{ burnAddress: string|null, burnAmount: number }}
+	   */
+	  extractBurnMetadata(entries, burnAmount) {
+	    if (!burnAmount || burnAmount <= 0) {
+	      return {
+	        burnAddress: null,
+	        burnAmount: 0
+	      };
+	    }
+
+	    const burnEntry = entries.find(({ address, value }) => {
+	      return typeof value === 'number' &&
+	        value === burnAmount &&
+	        this.burnManager.isBurnAddress(address);
+	    });
+
+	    return {
+	      burnAddress: burnEntry ? burnEntry.address : null,
+	      burnAmount
+	    };
+	  }
+
+	  /**
+	   * Extract XNA change metadata from outputs
+	   * @param {Array<{address: string, value: unknown}>} entries - Output entries
+	   * @param {string|null} burnAddress - Burn address if present
+	   * @returns {{ changeAddress: string|null, changeAmount: number|null }}
+	   */
+	  extractChangeMetadata(entries, burnAddress = null) {
+	    const xnaOutputs = entries.filter(({ address, value }) => {
+	      return typeof value === 'number' && address !== burnAddress;
+	    });
+
+	    if (xnaOutputs.length !== 1) {
+	      return {
+	        changeAddress: null,
+	        changeAmount: null
+	      };
+	    }
+
+	    return {
+	      changeAddress: xnaOutputs[0].address,
+	      changeAmount: xnaOutputs[0].value
+	    };
+	  }
+
+	  /**
 	   * Format transaction result
 	   * @param {string} rawTx - Raw transaction hex
 	   * @param {Array} utxos - UTXOs used
@@ -4408,13 +4544,26 @@ function requireBaseAssetTransactionBuilder () {
 	   * @returns {object} Formatted result
 	   */
 	  formatResult(rawTx, utxos, inputs, outputs, fee, burnAmount, extra = {}) {
+	    const outputEntries = this.getOutputEntries(outputs);
+	    const burnMetadata = this.extractBurnMetadata(outputEntries, burnAmount);
+	    const changeMetadata = this.extractChangeMetadata(outputEntries, burnMetadata.burnAddress);
+
 	    return {
 	      rawTx,
 	      utxos,
 	      inputs,
 	      outputs,
 	      fee,
-	      burnAmount,
+	      burnAmount: burnMetadata.burnAmount,
+	      network: this.network,
+	      buildStrategy: 'rpc-node',
+	      burnAddress: burnMetadata.burnAddress,
+	      changeAddress: extra.changeAddress !== undefined
+	        ? extra.changeAddress
+	        : changeMetadata.changeAddress,
+	      changeAmount: extra.changeAmount !== undefined
+	        ? extra.changeAmount
+	        : changeMetadata.changeAmount,
 	      ...extra
 	    };
 	  }
@@ -4631,7 +4780,23 @@ function requireIssueRootBuilder () {
 	      {
 	        assetName,
 	        ownerTokenName: assetName + '!',
-	        operationType: 'ISSUE_ROOT'
+	        operationType: 'ISSUE_ROOT',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'ISSUE_ROOT',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, units),
+	            units,
+	            reissuable,
+	            ipfsHash: hasIpfs ? ipfsHash : undefined,
+	            ownerTokenAddress: changeAddress
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -4877,7 +5042,23 @@ function requireIssueSubBuilder () {
 	        parentAssetName,
 	        ownerTokenName: assetName + '!',
 	        parentOwnerTokenUsed: ownerTokenName,
-	        operationType: 'ISSUE_SUB'
+	        operationType: 'ISSUE_SUB',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'ISSUE_SUB',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, units),
+	            units,
+	            reissuable,
+	            ipfsHash: hasIpfs ? ipfsHash : undefined,
+	            parentOwnerAddress: changeAddress
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -5030,7 +5211,22 @@ function requireIssueDepinBuilder () {
 	      {
 	        assetName,
 	        ownerTokenName: `${assetName}!`,
-	        operationType: 'ISSUE_DEPIN'
+	        operationType: 'ISSUE_DEPIN',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'ISSUE_DEPIN',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, 0),
+	            ipfsHash: hasIpfs ? ipfsHash : undefined,
+	            ownerTokenAddress: changeAddress,
+	            reissuable
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -5278,7 +5474,23 @@ function requireReissueBuilder () {
 	        newTotalSupply,
 	        previousSupply: currentSupply,
 	        reissuableLocked: reissuable === false,
-	        operationType: 'REISSUE'
+	        operationType: 'REISSUE',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'REISSUE',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, units),
+	            units,
+	            reissuable: reissuable !== undefined ? reissuable : undefined,
+	            ipfsHash: newIpfs || undefined,
+	            ownerChangeAddress: isDepinAsset ? toAddress : changeAddress
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -5535,7 +5747,21 @@ function requireIssueUniqueBuilder () {
 	        createdNFTs,
 	        nftCount,
 	        ownerTokenUsed: ownerTokenName,
-	        operationType: 'ISSUE_UNIQUE'
+	        operationType: 'ISSUE_UNIQUE',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'ISSUE_UNIQUE',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            rootName,
+	            assetTags,
+	            ipfsHashes: ipfsHashes.length > 0 ? ipfsHashes : undefined,
+	            ownerTokenAddress: changeAddress
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -5780,7 +6006,24 @@ function requireIssueQualifierBuilder () {
 	        qualifierType: isSub ? 'SUB_QUALIFIER' : 'QUALIFIER',
 	        parentQualifier: isSub ? parsed.parent : null,
 	        parentQualifierUsed: parentQualifierName,
-	        operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER'
+	        operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
+	        localRawBuild: this.buildLocalRawBuild(
+	          isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, 0),
+	            ipfsHash: hasIpfs ? ipfsHash : undefined,
+	            rootChangeAddress: isSub ? changeAddress : undefined,
+	            changeQuantityRaw: isSub && parentQualifierQuantity !== null
+	              ? this.toSatoshis(parentQualifierQuantity, 0)
+	              : undefined
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -6010,7 +6253,24 @@ function requireIssueRestrictedBuilder () {
 	        ownerTokenName,
 	        verifierString,
 	        requiredQualifiers,
-	        operationType: 'ISSUE_RESTRICTED'
+	        operationType: 'ISSUE_RESTRICTED',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'ISSUE_RESTRICTED',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, units),
+	            verifierString,
+	            units,
+	            reissuable,
+	            ipfsHash: hasIpfs ? ipfsHash : undefined,
+	            ownerChangeAddress: changeAddress
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -6273,7 +6533,24 @@ function requireReissueRestrictedBuilder () {
 	        newVerifier: changeVerifier ? newVerifier : undefined,
 	        requiredQualifiers,
 	        reissuableLocked: reissuable === false,
-	        operationType: 'REISSUE_RESTRICTED'
+	        operationType: 'REISSUE_RESTRICTED',
+	        localRawBuild: this.buildLocalRawBuild(
+	          'REISSUE_RESTRICTED',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            toAddress,
+	            assetName,
+	            quantityRaw: this.toSatoshis(quantity, assetData.units || 0),
+	            units: assetData.units || 0,
+	            reissuable: reissuable !== undefined ? reissuable : undefined,
+	            ipfsHash: newIpfs || undefined,
+	            ownerChangeAddress: this.params.ownerChangeAddress || changeAddress,
+	            verifierString: changeVerifier ? newVerifier : undefined
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -6496,7 +6773,20 @@ function requireTagAddressBuilder () {
 	        qualifierAssetUsed: qualifierName,
 	        targetAddresses,
 	        addressCount,
-	        operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES'
+	        operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
+	        localRawBuild: this.buildLocalRawBuild(
+	          isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
+	          inputs,
+	          burnInfo,
+	          changeAddress,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          {
+	            qualifierName,
+	            targetAddresses,
+	            qualifierChangeAddress: changeAddress,
+	            qualifierChangeAmountRaw: this.toSatoshis(qualifierQuantity, 0)
+	          }
+	        )
 	      }
 	    );
 	  }
@@ -6743,7 +7033,24 @@ function requireFreezeAddressBuilder () {
 	        ownerTokenUsed: ownerTokenName,
 	        targetAddresses: targetAddresses.length > 0 ? targetAddresses : null,
 	        addressCount: targetAddresses.length,
-	        operationType
+	        operationType,
+	        localRawBuild: this.buildLocalRawBuild(
+	          operationType,
+	          inputs,
+	          null,
+	          xnaChange > 0.00000001 ? changeAddress : null,
+	          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+	          operationType === 'FREEZE_ADDRESSES' || operationType === 'UNFREEZE_ADDRESSES'
+	            ? {
+	                assetName,
+	                targetAddresses,
+	                ownerChangeAddress: changeAddress
+	              }
+	            : {
+	                assetName,
+	                ownerChangeAddress: changeAddress
+	              }
+	        )
 	      }
 	    );
 	  }
@@ -6920,7 +7227,7 @@ function requireNeuraiAssets () {
 	    return {
 	      ...params,
 	      network: this.config.network,
-	      addresses: this.config.addresses,
+	      walletAddresses: this.config.addresses,
 	      changeAddress: params.changeAddress || this.config.changeAddress,
 	      toAddress: params.toAddress || this.config.toAddress
 	    };

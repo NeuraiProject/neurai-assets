@@ -245,7 +245,24 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
         newVerifier: changeVerifier ? newVerifier : undefined,
         requiredQualifiers,
         reissuableLocked: reissuable === false,
-        operationType: 'REISSUE_RESTRICTED'
+        operationType: 'REISSUE_RESTRICTED',
+        localRawBuild: this.buildLocalRawBuild(
+          'REISSUE_RESTRICTED',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, assetData.units || 0),
+            units: assetData.units || 0,
+            reissuable: reissuable !== undefined ? reissuable : undefined,
+            ipfsHash: newIpfs || undefined,
+            ownerChangeAddress: this.params.ownerChangeAddress || changeAddress,
+            verifierString: changeVerifier ? newVerifier : undefined
+          }
+        )
       }
     );
   }

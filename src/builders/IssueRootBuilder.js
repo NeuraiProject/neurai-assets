@@ -164,7 +164,23 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
       {
         assetName,
         ownerTokenName: assetName + '!',
-        operationType: 'ISSUE_ROOT'
+        operationType: 'ISSUE_ROOT',
+        localRawBuild: this.buildLocalRawBuild(
+          'ISSUE_ROOT',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, units),
+            units,
+            reissuable,
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            ownerTokenAddress: changeAddress
+          }
+        )
       }
     );
   }

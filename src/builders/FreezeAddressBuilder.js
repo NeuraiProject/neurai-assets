@@ -213,7 +213,24 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
         ownerTokenUsed: ownerTokenName,
         targetAddresses: targetAddresses.length > 0 ? targetAddresses : null,
         addressCount: targetAddresses.length,
-        operationType
+        operationType,
+        localRawBuild: this.buildLocalRawBuild(
+          operationType,
+          inputs,
+          null,
+          xnaChange > 0.00000001 ? changeAddress : null,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          operationType === 'FREEZE_ADDRESSES' || operationType === 'UNFREEZE_ADDRESSES'
+            ? {
+                assetName,
+                targetAddresses,
+                ownerChangeAddress: changeAddress
+              }
+            : {
+                assetName,
+                ownerChangeAddress: changeAddress
+              }
+        )
       }
     );
   }

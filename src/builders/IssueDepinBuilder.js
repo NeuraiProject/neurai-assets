@@ -135,7 +135,22 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
       {
         assetName,
         ownerTokenName: `${assetName}!`,
-        operationType: 'ISSUE_DEPIN'
+        operationType: 'ISSUE_DEPIN',
+        localRawBuild: this.buildLocalRawBuild(
+          'ISSUE_DEPIN',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.toSatoshis(quantity, 0),
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            ownerTokenAddress: changeAddress,
+            reissuable
+          }
+        )
       }
     );
   }

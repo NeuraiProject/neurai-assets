@@ -5,11 +5,52 @@ export interface NeuraiAssetsConfig {
   toAddress?: string | null;
 }
 
+export type OperationType =
+  | 'ISSUE_ROOT'
+  | 'ISSUE_SUB'
+  | 'ISSUE_DEPIN'
+  | 'ISSUE_UNIQUE'
+  | 'ISSUE_QUALIFIER'
+  | 'ISSUE_SUB_QUALIFIER'
+  | 'ISSUE_RESTRICTED'
+  | 'REISSUE'
+  | 'REISSUE_RESTRICTED'
+  | 'TAG_ADDRESSES'
+  | 'UNTAG_ADDRESSES'
+  | 'FREEZE_ADDRESSES'
+  | 'UNFREEZE_ADDRESSES'
+  | 'FREEZE_ASSET'
+  | 'UNFREEZE_ASSET';
+
+export type BuildStrategy = 'rpc-node' | 'local-builder';
+
+export interface BuildInput {
+  txid: string;
+  vout: number;
+  address: string;
+  satoshis: number;
+  assetName?: string;
+}
+
+export interface LocalRawBuild {
+  operationType: OperationType;
+  params: Record<string, unknown>;
+}
+
 export interface NeuraiAssetsBuildResult {
   rawTx: string;
-  fee?: number;
-  inputs?: unknown[];
-  outputs?: unknown[];
+  fee: number;
+  burnAmount: number;
+  network: string;
+  buildStrategy: BuildStrategy;
+  burnAddress: string | null;
+  changeAddress: string | null;
+  changeAmount: number | null;
+  operationType?: OperationType;
+  localRawBuild?: LocalRawBuild;
+  inputs: BuildInput[];
+  outputs: Array<Record<string, unknown>>;
+  utxos?: unknown[];
   assetData?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -113,4 +154,12 @@ declare const validators: Record<string, unknown>;
 declare const utils: Record<string, unknown>;
 
 export default NeuraiAssets;
-export { AssetQueries, NeuraiAssets, builders, constants, errors, utils, validators };
+export {
+  AssetQueries,
+  NeuraiAssets,
+  builders,
+  constants,
+  errors,
+  utils,
+  validators
+};

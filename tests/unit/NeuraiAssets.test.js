@@ -75,7 +75,7 @@ describe('NeuraiAssets', () => {
       expect(params.assetName).to.equal('MYTOKEN');
       expect(params.quantity).to.equal(1000);
       expect(params.network).to.equal('xna');
-      expect(params.addresses).to.deep.equal(['N123...']);
+      expect(params.walletAddresses).to.deep.equal(['N123...']);
       expect(params.changeAddress).to.equal('N123...');
       expect(params.toAddress).to.equal('N456...');
     });
@@ -87,6 +87,16 @@ describe('NeuraiAssets', () => {
       });
 
       expect(params.changeAddress).to.equal('N999...');
+    });
+
+    it('should preserve operation target addresses', () => {
+      const params = assets._buildParams({
+        qualifierName: '#KYC',
+        addresses: ['N_TARGET_1...', 'N_TARGET_2...']
+      });
+
+      expect(params.addresses).to.deep.equal(['N_TARGET_1...', 'N_TARGET_2...']);
+      expect(params.walletAddresses).to.deep.equal(['N123...']);
     });
   });
 

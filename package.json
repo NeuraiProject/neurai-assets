@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-assets",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Non-custodial Neurai asset management library for JavaScript",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -53,6 +53,7 @@
     "access": "public"
   },
   "devDependencies": {
+    "@neuraiproject/neurai-create-transaction": "^0.1.1",
     "@rollup/plugin-commonjs": "^28.0.8",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "chai": "^4.3.10",

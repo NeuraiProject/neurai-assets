@@ -239,7 +239,21 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
         createdNFTs,
         nftCount,
         ownerTokenUsed: ownerTokenName,
-        operationType: 'ISSUE_UNIQUE'
+        operationType: 'ISSUE_UNIQUE',
+        localRawBuild: this.buildLocalRawBuild(
+          'ISSUE_UNIQUE',
+          inputs,
+          burnInfo,
+          changeAddress,
+          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          {
+            toAddress,
+            rootName,
+            assetTags,
+            ipfsHashes: ipfsHashes.length > 0 ? ipfsHashes : undefined,
+            ownerTokenAddress: changeAddress
+          }
+        )
       }
     );
   }
