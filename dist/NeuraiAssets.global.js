@@ -4376,23 +4376,27 @@ var NeuraiAssetsBundle = (function (exports) {
 		  }
 
 		  /**
-		   * Convert amount to satoshis
-		   * @param {number} amount - Amount in asset units
-		   * @param {number} units - Decimal places
-		   * @returns {number} Amount in satoshis
+		   * Convert asset amount to protocol raw units.
+		   * Asset raw quantities in transaction payloads are always encoded with
+		   * 8 decimal places, regardless of the asset's displayed `units`.
+		   *
+		   * @param {number} amount - User-facing asset amount
+		   * @param {number} units - Asset decimal places (kept for API compatibility)
+		   * @returns {number} Amount in protocol raw units
 		   */
 		  toSatoshis(amount, units) {
-		    return Math.round(amount * Math.pow(10, units));
+		    return Math.round(amount * 100000000);
 		  }
 
 		  /**
-		   * Convert satoshis to amount
-		   * @param {number} satoshis - Amount in satoshis
-		   * @param {number} units - Decimal places
+		   * Convert protocol raw units back to a user-facing asset amount.
+		   *
+		   * @param {number} satoshis - Amount in protocol raw units
+		   * @param {number} units - Asset decimal places (kept for API compatibility)
 		   * @returns {number} Amount in asset units
 		   */
 		  fromSatoshis(satoshis, units) {
-		    return satoshis / Math.pow(10, units);
+		    return satoshis / 100000000;
 		  }
 
 		  /**
@@ -5975,11 +5979,13 @@ var NeuraiAssetsBundle = (function (exports) {
 		    // Last: Issue qualifier operation
 		    const issueQualifierOutput = OutputFormatter.formatIssueQualifierOutput({
 		      asset_name: assetName,
-		      asset_quantity: quantity,
+		      asset_quantity: this.toSatoshis(quantity, 0),
 		      has_ipfs: hasIpfs,
 		      ipfs_hash: ipfsHash,
 		      root_change_address: isSub ? changeAddress : undefined,
-		      change_quantity: isSub ? parentQualifierQuantity : undefined
+		      change_quantity: isSub && parentQualifierQuantity !== null
+		        ? this.toSatoshis(parentQualifierQuantity, 0)
+		        : undefined
 		    });
 
 		    outputs.push({ [toAddress]: issueQualifierOutput });
@@ -6741,12 +6747,12 @@ var NeuraiAssetsBundle = (function (exports) {
 		      ? OutputFormatter.formatUntagAddressesOutput({
 		          qualifier: qualifierName,
 		          addresses: targetAddresses,
-		          change_quantity: qualifierQuantity
+		          change_quantity: this.toSatoshis(qualifierQuantity, 0)
 		        })
 		      : OutputFormatter.formatTagAddressesOutput({
 		          qualifier: qualifierName,
 		          addresses: targetAddresses,
-		          change_quantity: qualifierQuantity
+		          change_quantity: this.toSatoshis(qualifierQuantity, 0)
 		        });
 
 		    outputs.push({ [changeAddress]: operationOutput });
