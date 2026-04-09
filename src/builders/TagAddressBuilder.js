@@ -174,12 +174,12 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       ? OutputFormatter.formatUntagAddressesOutput({
           qualifier: qualifierName,
           addresses: targetAddresses,
-          change_quantity: qualifierQuantity
+          change_quantity: this.toSatoshis(qualifierQuantity, 0)
         })
       : OutputFormatter.formatTagAddressesOutput({
           qualifier: qualifierName,
           addresses: targetAddresses,
-          change_quantity: qualifierQuantity
+          change_quantity: this.toSatoshis(qualifierQuantity, 0)
         });
 
     outputs.push({ [changeAddress]: operationOutput });

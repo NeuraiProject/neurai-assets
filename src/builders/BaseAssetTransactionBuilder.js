@@ -243,23 +243,29 @@ class BaseAssetTransactionBuilder {
   }
 
   /**
-   * Convert amount to satoshis
-   * @param {number} amount - Amount in asset units
-   * @param {number} units - Decimal places
-   * @returns {number} Amount in satoshis
+   * Convert asset amount to protocol raw units.
+   * Asset raw quantities in transaction payloads are always encoded with
+   * 8 decimal places, regardless of the asset's displayed `units`.
+   *
+   * @param {number} amount - User-facing asset amount
+   * @param {number} units - Asset decimal places (kept for API compatibility)
+   * @returns {number} Amount in protocol raw units
    */
   toSatoshis(amount, units) {
-    return Math.round(amount * Math.pow(10, units));
+    void units;
+    return Math.round(amount * 100000000);
   }
 
   /**
-   * Convert satoshis to amount
-   * @param {number} satoshis - Amount in satoshis
-   * @param {number} units - Decimal places
+   * Convert protocol raw units back to a user-facing asset amount.
+   *
+   * @param {number} satoshis - Amount in protocol raw units
+   * @param {number} units - Asset decimal places (kept for API compatibility)
    * @returns {number} Amount in asset units
    */
   fromSatoshis(satoshis, units) {
-    return satoshis / Math.pow(10, units);
+    void units;
+    return satoshis / 100000000;
   }
 
   /**

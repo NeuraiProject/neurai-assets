@@ -197,11 +197,13 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     // Last: Issue qualifier operation
     const issueQualifierOutput = OutputFormatter.formatIssueQualifierOutput({
       asset_name: assetName,
-      asset_quantity: quantity,
+      asset_quantity: this.toSatoshis(quantity, 0),
       has_ipfs: hasIpfs,
       ipfs_hash: ipfsHash,
       root_change_address: isSub ? changeAddress : undefined,
-      change_quantity: isSub ? parentQualifierQuantity : undefined
+      change_quantity: isSub && parentQualifierQuantity !== null
+        ? this.toSatoshis(parentQualifierQuantity, 0)
+        : undefined
     });
 
     outputs.push({ [toAddress]: issueQualifierOutput });
