@@ -1,8 +1,9 @@
 const { expect } = require('chai');
+const { bech32m } = require('bech32');
 const IssueQualifierBuilder = require('../../../src/builders/IssueQualifierBuilder');
 const IssueRootBuilder = require('../../../src/builders/IssueRootBuilder');
 
-const TEST_ADDRESS = 'tnq1ps6h07gxnzwrgk0hpzaqdzyavgl7j98kz4nfkk3';
+const TEST_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
 
 describe('IssueQualifierBuilder', () => {
   it('should serialize qualifier quantities in base units for createrawtransaction', async () => {

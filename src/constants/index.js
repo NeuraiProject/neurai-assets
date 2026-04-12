@@ -14,9 +14,13 @@ const {
 } = require('./burnAddresses');
 const {
   NETWORKS,
+  MAINNET_NETWORKS,
+  TESTNET_NETWORKS,
   ASSET_NAME_RULES,
   ASSET_LIMITS,
   getNetworkConfig,
+  resolveAddressNetworkFamily,
+  areAddressNetworksCompatible,
   detectNetworkFromAddress
 } = require('./networks');
 
@@ -39,8 +43,12 @@ module.exports = {
 
   // Networks
   NETWORKS,
+  MAINNET_NETWORKS,
+  TESTNET_NETWORKS,
   ASSET_NAME_RULES,
   ASSET_LIMITS,
   getNetworkConfig,
+  resolveAddressNetworkFamily,
+  areAddressNetworksCompatible,
   detectNetworkFromAddress
 };

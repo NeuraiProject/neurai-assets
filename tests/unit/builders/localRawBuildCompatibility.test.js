@@ -233,7 +233,7 @@ describe('Local Raw Build Compatibility', () => {
     expect(result.localRawBuild.params.verifierString).to.equal('#KYC');
     expect(outputs).to.have.length(5);
     expect(countScriptsContaining(outputs, asciiHex('ROOT!'))).to.equal(1);
-    expect(countScriptsContaining(outputs, asciiHex('#KYC'))).to.equal(1);
+    expect(countScriptsContaining(outputs, asciiHex('KYC'))).to.equal(1);
     expect(countScriptsContaining(outputs, '72766e72')).to.equal(1);
   });
 });

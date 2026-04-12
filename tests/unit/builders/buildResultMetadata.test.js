@@ -6,8 +6,8 @@ const { createFromOperation } = require('@neuraiproject/neurai-create-transactio
 
 describe('Build Result Metadata', () => {
   it('should expose burn and change metadata for root issuance', async () => {
-    const toWords = bech32m.toWords(Buffer.alloc(20, 1));
-    const changeWords = bech32m.toWords(Buffer.alloc(20, 2));
+    const toWords = bech32m.toWords(Buffer.alloc(32, 1));
+    const changeWords = bech32m.toWords(Buffer.alloc(32, 2));
     const toAddress = bech32m.encode('tnq', [1, ...toWords]);
     const changeAddress = bech32m.encode('tnq', [1, ...changeWords]);
 
@@ -82,6 +82,59 @@ describe('Build Result Metadata', () => {
     });
 
     const localBuilt = createFromOperation(result.localRawBuild);
+    expect(localBuilt.rawTx).to.be.a('string');
+    expect(localBuilt.rawTx.length).to.be.greaterThan(0);
+  });
+
+  it('should keep localRawBuild compatible when mixing legacy and AuthScript destinations', async () => {
+    const authScriptWords = bech32m.toWords(Buffer.alloc(32, 3));
+    const authScriptAddress = bech32m.encode('tnq', [1, ...authScriptWords]);
+    const legacyAddress = 't7pvKtaVzbcsUijMT3z8KA4bkF1XxUiKqN';
+
+    const rpc = async (method, params = []) => {
+      switch (method) {
+        case 'getassetdata':
+          throw new Error('asset not found');
+
+        case 'getaddressutxos':
+          return [
+            {
+              txid: '0000000000000000000000000000000000000000000000000000000000000002',
+              outputIndex: 0,
+              address: legacyAddress,
+              satoshis: 200000000000
+            }
+          ];
+
+        case 'getaddressmempool':
+          return [];
+
+        case 'estimatesmartfee':
+          return { feerate: 0.015 };
+
+        case 'createrawtransaction':
+          return 'deadbeef';
+
+        default:
+          throw new Error(`Unexpected RPC method: ${method} (${JSON.stringify(params)})`);
+      }
+    };
+
+    const builder = new IssueRootBuilder(rpc, {
+      network: 'xna-test',
+      walletAddresses: [legacyAddress],
+      changeAddress: legacyAddress,
+      toAddress: authScriptAddress,
+      assetName: 'MIXED',
+      quantity: 1000,
+      units: 0
+    });
+
+    const result = await builder.build();
+    const localBuilt = createFromOperation(result.localRawBuild);
+
+    expect(result.changeAddress).to.equal(legacyAddress);
+    expect(result.localRawBuild.params.toAddress).to.equal(authScriptAddress);
     expect(localBuilt.rawTx).to.be.a('string');
     expect(localBuilt.rawTx.length).to.be.greaterThan(0);
   });

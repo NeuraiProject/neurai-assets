@@ -3,7 +3,11 @@
  * Detects network type from various sources
  */
 
-const { NETWORKS } = require('../constants');
+const {
+  NETWORKS,
+  areAddressNetworksCompatible,
+  resolveAddressNetworkFamily
+} = require('../constants');
 
 class NetworkDetector {
   /**
@@ -40,18 +44,18 @@ class NetworkDetector {
   /**
    * Detect network from address
    * @param {string} address - Neurai address
-   * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+   * @returns {string} Network label ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
    */
   static detectFromAddress(address) {
     if (!address || typeof address !== 'string') {
       throw new Error('Address must be a non-empty string');
     }
 
-    if (address.startsWith(NETWORKS.MAINNET_PQ.pqAddressPrefix)) {
+    if (address.startsWith(NETWORKS.MAINNET_PQ.authScriptAddressPrefix)) {
       return 'xna-pq';
     }
 
-    if (address.startsWith(NETWORKS.TESTNET_PQ.pqAddressPrefix)) {
+    if (address.startsWith(NETWORKS.TESTNET_PQ.authScriptAddressPrefix)) {
       return 'xna-pq-test';
     }
 
@@ -71,31 +75,32 @@ class NetworkDetector {
   /**
    * Detect network from multiple addresses
    * @param {string[]} addresses - Array of addresses
-   * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+   * @returns {string} Network label. Mixed legacy/AuthScript addresses on the same
+   * chain are normalized to the chain family label (`xna` or `xna-test`).
    */
   static detectFromAddresses(addresses) {
     if (!Array.isArray(addresses) || addresses.length === 0) {
       throw new Error('Addresses must be a non-empty array');
     }
 
-    // Detect from first address
-    const network = this.detectFromAddress(addresses[0]);
+    const firstNetwork = this.detectFromAddress(addresses[0]);
+    const family = resolveAddressNetworkFamily(firstNetwork);
 
     // Verify all addresses are from the same network
     for (let i = 1; i < addresses.length; i++) {
       const otherNetwork = this.detectFromAddress(addresses[i]);
-      if (otherNetwork !== network) {
-        throw new Error(`Mixed network addresses detected: ${network} and ${otherNetwork}`);
+      if (!areAddressNetworksCompatible(firstNetwork, otherNetwork)) {
+        throw new Error(`Mixed network addresses detected: ${firstNetwork} and ${otherNetwork}`);
       }
     }
 
-    return network;
+    return family === 'mainnet' ? 'xna' : 'xna-test';
   }
 
   /**
    * Validate that addresses match expected network
    * @param {string[]} addresses - Array of addresses
-   * @param {string} expectedNetwork - Expected network ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+   * @param {string} expectedNetwork - Expected network label
    * @returns {boolean} True if all addresses match network
    */
   static validateAddressesNetwork(addresses, expectedNetwork) {
@@ -105,7 +110,7 @@ class NetworkDetector {
 
     for (const address of addresses) {
       const network = this.detectFromAddress(address);
-      if (network !== expectedNetwork) {
+      if (!areAddressNetworksCompatible(network, expectedNetwork)) {
         throw new Error(
           `Address ${address} is from ${network} but expected ${expectedNetwork}`
         );

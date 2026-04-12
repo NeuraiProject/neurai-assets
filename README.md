@@ -10,7 +10,7 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 - ✅ **RPC queries**: Complete wrapper for all asset query methods
 - ✅ **Client-side validation**: Prevents errors before creating transactions
 - ✅ **Owner token protection**: Validation to prevent permanent loss
-- ✅ **PQ-ready networks**: Supports `xna-pq` and `xna-pq-test` with `nq1...` / `tnq1...` addresses
+- ✅ **Legacy + AuthScript destinations**: Supports classic `N...` / `t...` and witness-v1 `nq1...` / `tnq1...` addresses
 
 ## Supported Asset Types
 
@@ -87,14 +87,14 @@ const signedTx = await wallet.signTransaction(result.rawTx);
 const txid = await wallet.broadcastTransaction(signedTx);
 ```
 
-You can also initialize the library with PQ networks and addresses:
+You can also initialize the library with AuthScript addresses:
 
 ```javascript
 const assetsPQ = new NeuraiAssets(rpc, {
-  network: 'xna-pq',                 // or 'xna-pq-test'
-  addresses: ['nq1yourpqaddress...'],
-  changeAddress: 'nq1yourpqchange...',
-  toAddress: 'nq1recipientpqaddress...'
+  network: 'xna',                    // 'xna-pq' / 'xna-pq-test' remain valid aliases
+  addresses: ['nq1yourauthscriptaddress...'],
+  changeAddress: 'nq1yourauthscriptchange...',
+  toAddress: 'nq1recipientauthscriptaddress...'
 });
 ```
 
@@ -148,8 +148,8 @@ const result = await assets.createDepinAsset({
 });
 ```
 
-> **Note**: DEPIN assets always use `units = 0`. The library accepts both legacy
-> and PQ addresses as recipients depending on the configured network.
+> **Note**: DEPIN assets always use `units = 0`. Recipient and change destinations
+> can be either legacy or AuthScript, as long as they belong to the same chain family.
 
 ### Create UNIQUE Assets (NFTs)
 
@@ -504,17 +504,17 @@ const assets = new NeuraiAssets(rpc, {
   toAddress: 't...'
 });
 
-// PQ Mainnet
+// AuthScript mainnet using the canonical network label
 const assetsPQ = new NeuraiAssets(rpc, {
-  network: 'xna-pq',
+  network: 'xna',
   addresses: ['nq1...'],
   changeAddress: 'nq1...',
   toAddress: 'nq1...'
 });
 
-// PQ Testnet
+// AuthScript testnet using the canonical network label
 const assetsPQTest = new NeuraiAssets(rpc, {
-  network: 'xna-pq-test',
+  network: 'xna-test',
   addresses: ['tnq1...'],
   changeAddress: 'tnq1...',
   toAddress: 'tnq1...'
@@ -523,13 +523,13 @@ const assetsPQTest = new NeuraiAssets(rpc, {
 
 The library accepts these network names:
 
-- `xna`: legacy/mainnet address flow (`N...`)
-- `xna-test`: legacy/testnet address flow (`t...`)
-- `xna-pq`: PQ mainnet address flow (`nq1...`)
-- `xna-pq-test`: PQ testnet address flow (`tnq1...`)
+- `xna`: mainnet chain family, valid for both legacy `N...` and AuthScript `nq1...`
+- `xna-test`: testnet chain family, valid for both legacy `t...` and AuthScript `tnq1...`
+- `xna-pq`: compatibility alias for AuthScript mainnet flows
+- `xna-pq-test`: compatibility alias for AuthScript testnet flows
 
-If you need to derive PQ addresses, use `neurai-key` and pass the resulting `nq1...`
-or `tnq1...` addresses into this library.
+If you need to derive AuthScript addresses, use `neurai-key` and pass the resulting
+`nq1...` or `tnq1...` addresses into this library.
 
 ## Update Configuration
 
@@ -648,6 +648,6 @@ const txid = await wallet.broadcastTransaction(signedTx);
 console.log('Transaction ID:', txid);
 ```
 
-For PQ wallets, derive addresses externally with `neurai-key` using `xna-pq` or
-`xna-pq-test`, then initialize `NeuraiAssets` with those addresses and the matching
-network name.
+For AuthScript wallets, derive addresses externally with `neurai-key`, then initialize
+`NeuraiAssets` with those `nq1...` / `tnq1...` addresses. The recommended network labels
+are `xna` and `xna-test`; `xna-pq` and `xna-pq-test` remain available as compatibility aliases.

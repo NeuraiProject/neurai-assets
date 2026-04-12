@@ -1,8 +1,9 @@
 const { expect } = require('chai');
+const { bech32m } = require('bech32');
 const TagAddressBuilder = require('../../../src/builders/TagAddressBuilder');
 
-const TEST_ADDRESS = 'tnq1ps6h07gxnzwrgk0hpzaqdzyavgl7j98kz4nfkk3';
-const TARGET_ADDRESS = 'tnq1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqh7w2g7';
+const TEST_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 8))]);
+const TARGET_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 9))]);
 
 describe('TagAddressBuilder', () => {
   it('should serialize tag change_quantity in base units for createrawtransaction', async () => {
