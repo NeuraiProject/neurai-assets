@@ -6,50 +6,162 @@
 const { ASSET_NAME_RULES } = require('../constants');
 const { InvalidAssetNameError } = require('../errors');
 
+const MIN_ASSET_LENGTH = 3;
+const MAINNET_MAX_NAME_LENGTH = 32;
+const TESTNET_MAX_NAME_LENGTH = 121;
+
+const ROOT_NAME_CHARACTERS = /^[A-Z0-9._]{3,}$/;
+const SUB_NAME_CHARACTERS = /^[A-Z0-9._]+$/;
+const UNIQUE_TAG_CHARACTERS = /^[-A-Za-z0-9@$%&*()[\]{}_.?:]+$/;
+const QUALIFIER_NAME_CHARACTERS = /^#[A-Z0-9._]{3,}$/;
+const SUB_QUALIFIER_NAME_CHARACTERS = /^#[A-Z0-9._]+$/;
+const RESTRICTED_NAME_CHARACTERS = /^\$[A-Z0-9._]{3,}$/;
+const DEPIN_NAME_CHARACTERS = /^&[A-Z0-9._]{3,}$/;
+const SUB_DEPIN_NAME_CHARACTERS = /^&[A-Z0-9._]+\/[A-Z0-9._/]+$/;
+const DOUBLE_PUNCTUATION = /^.*[._]{2,}.*$/;
+const LEADING_PUNCTUATION = /^[._].*$/;
+const TRAILING_PUNCTUATION = /^.*[._]$/;
+const QUALIFIER_LEADING_PUNCTUATION = /^[#$][._].*$/;
+const NEURAI_NAMES = /^XNA$|^NEURAI$|^NEURAICOIN$|^#XNA$|^#NEURAI$|^#NEURAICOIN$/;
+
+function isTestnet(network) {
+  return typeof network === 'string' && network.toLowerCase().includes('test');
+}
+
+function getMaxAssetNameLength(network) {
+  return isTestnet(network) ? TESTNET_MAX_NAME_LENGTH : MAINNET_MAX_NAME_LENGTH;
+}
+
+function getRootOrSubMaxLength(network) {
+  return getMaxAssetNameLength(network) - 1;
+}
+
+function ensureName(name, label) {
+  if (!name || typeof name !== 'string') {
+    throw new InvalidAssetNameError(`${label} must be a non-empty string`, name);
+  }
+}
+
+function ensureMaxLength(name, maxLength, label) {
+  if (name.length > maxLength) {
+    throw new InvalidAssetNameError(`${label} cannot exceed ${maxLength} characters`, name);
+  }
+}
+
+function ensureUppercase(name, message) {
+  if (name !== name.toUpperCase()) {
+    throw new InvalidAssetNameError(message, name);
+  }
+}
+
+function isRootNameValid(name) {
+  return ROOT_NAME_CHARACTERS.test(name)
+    && !DOUBLE_PUNCTUATION.test(name)
+    && !LEADING_PUNCTUATION.test(name)
+    && !TRAILING_PUNCTUATION.test(name)
+    && !NEURAI_NAMES.test(name);
+}
+
+function isSubNameValid(name) {
+  return SUB_NAME_CHARACTERS.test(name)
+    && !DOUBLE_PUNCTUATION.test(name)
+    && !LEADING_PUNCTUATION.test(name)
+    && !TRAILING_PUNCTUATION.test(name);
+}
+
+function isQualifierNameValid(name) {
+  return QUALIFIER_NAME_CHARACTERS.test(name)
+    && !DOUBLE_PUNCTUATION.test(name)
+    && !QUALIFIER_LEADING_PUNCTUATION.test(name)
+    && !TRAILING_PUNCTUATION.test(name)
+    && !NEURAI_NAMES.test(name);
+}
+
+function isSubQualifierNameValid(name) {
+  return SUB_QUALIFIER_NAME_CHARACTERS.test(name)
+    && !DOUBLE_PUNCTUATION.test(name)
+    && !LEADING_PUNCTUATION.test(name)
+    && !TRAILING_PUNCTUATION.test(name);
+}
+
+function isRestrictedNameValid(name) {
+  return RESTRICTED_NAME_CHARACTERS.test(name)
+    && !DOUBLE_PUNCTUATION.test(name)
+    && !LEADING_PUNCTUATION.test(name)
+    && !TRAILING_PUNCTUATION.test(name)
+    && !NEURAI_NAMES.test(name);
+}
+
+function isNameValidBeforeTag(name) {
+  const parts = name.split('/');
+
+  if (!isRootNameValid(parts[0])) {
+    return false;
+  }
+
+  for (let index = 1; index < parts.length; index += 1) {
+    if (!isSubNameValid(parts[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isQualifierNameValidBeforeTag(name) {
+  const parts = name.split('/');
+
+  if (!isQualifierNameValid(parts[0])) {
+    return false;
+  }
+
+  if (parts.length > 2) {
+    return false;
+  }
+
+  for (let index = 1; index < parts.length; index += 1) {
+    if (!isSubQualifierNameValid(parts[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isDepinIndicator(name) {
+  return DEPIN_NAME_CHARACTERS.test(name) || SUB_DEPIN_NAME_CHARACTERS.test(name);
+}
+
 class AssetNameValidator {
   /**
    * Validate ROOT asset name
-   * Rules: 3-30 uppercase characters, A-Z, 0-9, underscore, period
-   * Cannot start with period, A, or Z
+   * Rules: 3-31 visible characters on mainnet, A-Z, 0-9, underscore, period
+   * Cannot start or end with period/underscore, cannot use repeated punctuation
    * Cannot be reserved names
    */
-  static validateRoot(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('Asset name must be a non-empty string', name);
-    }
+  static validateRoot(name, network = 'xna') {
+    ensureName(name, 'Asset name');
 
-    // Length check
-    if (name.length < ASSET_NAME_RULES.ROOT.minLength || name.length > ASSET_NAME_RULES.ROOT.maxLength) {
+    const maxLength = getRootOrSubMaxLength(network);
+
+    if (name.length < MIN_ASSET_LENGTH || name.length > maxLength) {
       throw new InvalidAssetNameError(
-        `ROOT asset name must be ${ASSET_NAME_RULES.ROOT.minLength}-${ASSET_NAME_RULES.ROOT.maxLength} characters`,
+        `ROOT asset name must be ${MIN_ASSET_LENGTH}-${maxLength} characters`,
         name
       );
     }
 
-    // Uppercase check
-    if (name !== name.toUpperCase()) {
-      throw new InvalidAssetNameError('Asset name must be uppercase', name);
-    }
+    ensureUppercase(name, 'Asset name must be uppercase');
 
-    // Starting character check
-    if (ASSET_NAME_RULES.ROOT.cannotStartWith.some(char => name.startsWith(char))) {
-      throw new InvalidAssetNameError(
-        `Asset name cannot start with: ${ASSET_NAME_RULES.ROOT.cannotStartWith.join(', ')}`,
-        name
-      );
-    }
-
-    // Pattern check
-    if (!ASSET_NAME_RULES.ROOT.pattern.test(name)) {
-      throw new InvalidAssetNameError(
-        'Asset name can only contain A-Z, 0-9, underscore, and period',
-        name
-      );
-    }
-
-    // Reserved names check
-    if (ASSET_NAME_RULES.ROOT.reserved.includes(name)) {
+    if (NEURAI_NAMES.test(name)) {
       throw new InvalidAssetNameError(`${name} is a reserved asset name`, name);
+    }
+
+    if (!isRootNameValid(name)) {
+      throw new InvalidAssetNameError(
+        'Name contains invalid characters (Valid characters are: A-Z 0-9 _ .) (special characters can\'t be the first or last characters)',
+        name
+      );
     }
 
     return true;
@@ -59,39 +171,25 @@ class AssetNameValidator {
    * Validate SUB asset name
    * Format: ROOT/SUBNAME
    */
-  static validateSub(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('SUB asset name must be a non-empty string', name);
-    }
+  static validateSub(name, network = 'xna') {
+    ensureName(name, 'SUB asset name');
 
-    const parts = name.split(ASSET_NAME_RULES.SUB.separator);
-    if (parts.length !== 2) {
+    if (!name.includes(ASSET_NAME_RULES.SUB.separator)) {
       throw new InvalidAssetNameError(
         `SUB asset must be in ${ASSET_NAME_RULES.SUB.separator} format (ROOT/SUBNAME)`,
         name
       );
     }
 
-    const [rootName, subName] = parts;
+    ensureMaxLength(name, getRootOrSubMaxLength(network), 'SUB asset name');
 
-    // Validate root part
-    this.validateRoot(rootName);
-
-    // Validate sub part
-    if (subName.length < ASSET_NAME_RULES.SUB.minLength || subName.length > ASSET_NAME_RULES.SUB.maxLength) {
-      throw new InvalidAssetNameError(
-        `SUB asset name must be ${ASSET_NAME_RULES.SUB.minLength}-${ASSET_NAME_RULES.SUB.maxLength} characters`,
-        name
-      );
-    }
-
-    if (subName !== subName.toUpperCase()) {
+    if (name !== name.toUpperCase()) {
       throw new InvalidAssetNameError('SUB asset name must be uppercase', name);
     }
 
-    if (!ASSET_NAME_RULES.SUB.pattern.test(subName)) {
+    if (!isNameValidBeforeTag(name)) {
       throw new InvalidAssetNameError(
-        'SUB asset name can only contain A-Z, 0-9, underscore, and period',
+        'Name contains invalid characters (Valid characters are: A-Z 0-9 _ .) (special characters can\'t be the first or last characters)',
         name
       );
     }
@@ -103,10 +201,10 @@ class AssetNameValidator {
    * Validate UNIQUE asset name
    * Format: ROOT#TAG
    */
-  static validateUnique(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('UNIQUE asset name must be a non-empty string', name);
-    }
+  static validateUnique(name, network = 'xna') {
+    ensureName(name, 'UNIQUE asset name');
+
+    ensureMaxLength(name, getMaxAssetNameLength(network), 'UNIQUE asset name');
 
     const parts = name.split(ASSET_NAME_RULES.UNIQUE.separator);
     if (parts.length !== 2) {
@@ -118,24 +216,9 @@ class AssetNameValidator {
 
     const [rootName, tag] = parts;
 
-    // Validate root part
-    this.validateRoot(rootName);
-
-    // Validate tag
-    if (tag.length < ASSET_NAME_RULES.UNIQUE.minLength || tag.length > ASSET_NAME_RULES.UNIQUE.maxLength) {
+    if (!isNameValidBeforeTag(rootName) || !UNIQUE_TAG_CHARACTERS.test(tag)) {
       throw new InvalidAssetNameError(
-        `UNIQUE tag must be ${ASSET_NAME_RULES.UNIQUE.minLength}-${ASSET_NAME_RULES.UNIQUE.maxLength} characters`,
-        name
-      );
-    }
-
-    if (tag !== tag.toUpperCase()) {
-      throw new InvalidAssetNameError('UNIQUE tag must be uppercase', name);
-    }
-
-    if (!ASSET_NAME_RULES.UNIQUE.pattern.test(tag)) {
-      throw new InvalidAssetNameError(
-        'UNIQUE tag can only contain A-Z, 0-9, underscore, and period',
+        'Unique name contains invalid characters (Valid characters are: A-Z a-z 0-9 @ $ % & * ( ) [ ] { } _ . ? : -)',
         name
       );
     }
@@ -147,10 +230,8 @@ class AssetNameValidator {
    * Validate QUALIFIER asset name
    * Format: #NAME or #ROOT/SUB
    */
-  static validateQualifier(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('QUALIFIER asset name must be a non-empty string', name);
-    }
+  static validateQualifier(name, network = 'xna') {
+    ensureName(name, 'QUALIFIER asset name');
 
     if (!name.startsWith(ASSET_NAME_RULES.QUALIFIER.prefix)) {
       throw new InvalidAssetNameError(
@@ -159,58 +240,17 @@ class AssetNameValidator {
       );
     }
 
-    const withoutPrefix = name.substring(1);
+    ensureMaxLength(name, getMaxAssetNameLength(network), 'QUALIFIER asset name');
 
-    if (withoutPrefix.includes(ASSET_NAME_RULES.QUALIFIER.separator)) {
-      // Sub-qualifier: #ROOT/SUB
-      const parts = withoutPrefix.split(ASSET_NAME_RULES.QUALIFIER.separator);
-      if (parts.length !== 2) {
-        throw new InvalidAssetNameError(
-          'SUB_QUALIFIER must be in #ROOT/SUB format',
-          name
-        );
-      }
+    if (name !== name.toUpperCase()) {
+      throw new InvalidAssetNameError('QUALIFIER name must be uppercase', name);
+    }
 
-      // Validate each part as a qualifier name (without the #)
-      parts.forEach(part => {
-        if (part.length < ASSET_NAME_RULES.QUALIFIER.minLength || part.length > ASSET_NAME_RULES.QUALIFIER.maxLength) {
-          throw new InvalidAssetNameError(
-            `QUALIFIER name must be ${ASSET_NAME_RULES.QUALIFIER.minLength}-${ASSET_NAME_RULES.QUALIFIER.maxLength} characters`,
-            name
-          );
-        }
-
-        if (part !== part.toUpperCase()) {
-          throw new InvalidAssetNameError('QUALIFIER name must be uppercase', name);
-        }
-
-        if (!ASSET_NAME_RULES.QUALIFIER.pattern.test(part)) {
-          throw new InvalidAssetNameError(
-            'QUALIFIER name can only contain A-Z, 0-9, and underscore',
-            name
-          );
-        }
-      });
-    } else {
-      // Root qualifier: #NAME
-      if (withoutPrefix.length < ASSET_NAME_RULES.QUALIFIER.minLength ||
-          withoutPrefix.length > ASSET_NAME_RULES.QUALIFIER.maxLength) {
-        throw new InvalidAssetNameError(
-          `QUALIFIER name must be ${ASSET_NAME_RULES.QUALIFIER.minLength}-${ASSET_NAME_RULES.QUALIFIER.maxLength} characters`,
-          name
-        );
-      }
-
-      if (withoutPrefix !== withoutPrefix.toUpperCase()) {
-        throw new InvalidAssetNameError('QUALIFIER name must be uppercase', name);
-      }
-
-      if (!ASSET_NAME_RULES.QUALIFIER.pattern.test(withoutPrefix)) {
-        throw new InvalidAssetNameError(
-          'QUALIFIER name can only contain A-Z, 0-9, and underscore',
-          name
-        );
-      }
+    if (!isQualifierNameValidBeforeTag(name)) {
+      throw new InvalidAssetNameError(
+        'Qualifier name contains invalid characters (Valid characters are: A-Z 0-9 _ .) (# must be the first character, _ . special characters can\'t be the first or last characters)',
+        name
+      );
     }
 
     return true;
@@ -220,10 +260,8 @@ class AssetNameValidator {
    * Validate RESTRICTED asset name
    * Format: $NAME
    */
-  static validateRestricted(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('RESTRICTED asset name must be a non-empty string', name);
-    }
+  static validateRestricted(name, network = 'xna') {
+    ensureName(name, 'RESTRICTED asset name');
 
     if (!name.startsWith(ASSET_NAME_RULES.RESTRICTED.prefix)) {
       throw new InvalidAssetNameError(
@@ -232,10 +270,18 @@ class AssetNameValidator {
       );
     }
 
-    const withoutPrefix = name.substring(1);
+    ensureMaxLength(name, getMaxAssetNameLength(network), 'RESTRICTED asset name');
 
-    // Validate the part after $ as a ROOT asset name
-    this.validateRoot(withoutPrefix);
+    if (name !== name.toUpperCase()) {
+      throw new InvalidAssetNameError('RESTRICTED asset name must be uppercase', name);
+    }
+
+    if (!isRestrictedNameValid(name)) {
+      throw new InvalidAssetNameError(
+        'Restricted name contains invalid characters (Valid characters are: A-Z 0-9 _ .) ($ must be the first character, _ . special characters can\'t be the first or last characters)',
+        name
+      );
+    }
 
     return true;
   }
@@ -244,10 +290,8 @@ class AssetNameValidator {
    * Validate DEPIN asset name
    * Format: &NAME or &NAME/SUB[/...]
    */
-  static validateDepin(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('DEPIN asset name must be a non-empty string', name);
-    }
+  static validateDepin(name, network) {
+    ensureName(name, 'DEPIN asset name');
 
     if (!name.startsWith(ASSET_NAME_RULES.DEPIN.prefix)) {
       throw new InvalidAssetNameError(
@@ -256,57 +300,40 @@ class AssetNameValidator {
       );
     }
 
-    if (name.length > ASSET_NAME_RULES.DEPIN.maxLength) {
+    if (network && !isTestnet(network)) {
+      throw new InvalidAssetNameError('DEPIN assets are only available in testnet', name);
+    }
+
+    ensureMaxLength(name, getMaxAssetNameLength(network || 'xna-test'), 'DEPIN asset name');
+
+    if (name !== name.toUpperCase()) {
+      throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);
+    }
+
+    if (!isDepinIndicator(name)) {
       throw new InvalidAssetNameError(
-        `DEPIN asset name cannot exceed ${ASSET_NAME_RULES.DEPIN.maxLength} characters`,
+        'DEPIN asset name can only contain A-Z, 0-9, underscore, period, and separator /',
         name
       );
     }
 
     const parts = name.split(ASSET_NAME_RULES.DEPIN.separator);
-    if (parts.length === 0) {
-      throw new InvalidAssetNameError('DEPIN asset name is invalid', name);
-    }
 
-    const rootPart = parts[0].substring(1);
-    if (rootPart.length < ASSET_NAME_RULES.DEPIN.minLength) {
+    if (parts.length > 1) {
+      parts.forEach(part => {
+        if (part.length < MIN_ASSET_LENGTH) {
+          throw new InvalidAssetNameError(
+            `Each DEPIN sub-part must be at least ${MIN_ASSET_LENGTH} characters`,
+            name
+          );
+        }
+      });
+    } else if (name.length < MIN_ASSET_LENGTH + 1) {
       throw new InvalidAssetNameError(
-        `DEPIN root name must be at least ${ASSET_NAME_RULES.DEPIN.minLength} characters`,
+        `DEPIN name must be at least ${MIN_ASSET_LENGTH} characters (excluding &)`,
         name
       );
     }
-
-    if (rootPart !== rootPart.toUpperCase()) {
-      throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);
-    }
-
-    if (!ASSET_NAME_RULES.DEPIN.pattern.test(rootPart)) {
-      throw new InvalidAssetNameError(
-        'DEPIN asset name can only contain A-Z, 0-9, underscore, and period',
-        name
-      );
-    }
-
-    const subParts = parts.slice(1);
-    subParts.forEach(part => {
-      if (part.length < ASSET_NAME_RULES.DEPIN.minLength) {
-        throw new InvalidAssetNameError(
-          `Each DEPIN sub-part must be at least ${ASSET_NAME_RULES.DEPIN.minLength} characters`,
-          name
-        );
-      }
-
-      if (part !== part.toUpperCase()) {
-        throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);
-      }
-
-      if (!ASSET_NAME_RULES.DEPIN.pattern.test(part)) {
-        throw new InvalidAssetNameError(
-          'DEPIN asset name can only contain A-Z, 0-9, underscore, and period',
-          name
-        );
-      }
-    });
 
     return true;
   }
@@ -315,24 +342,31 @@ class AssetNameValidator {
    * Validate owner token name
    * Format: ASSETNAME!
    */
-  static validateOwnerToken(name) {
-    if (!name || typeof name !== 'string') {
-      throw new InvalidAssetNameError('Owner token name must be a non-empty string', name);
-    }
+  static validateOwnerToken(name, network) {
+    ensureName(name, 'Owner token name');
+
+    ensureMaxLength(name, getMaxAssetNameLength(network), 'Owner token name');
 
     if (!name.endsWith('!')) {
       throw new InvalidAssetNameError('Owner token must end with !', name);
     }
 
     const assetName = name.substring(0, name.length - 1);
+    const validBaseName = isNameValidBeforeTag(assetName)
+      || (assetName.startsWith('&') && (() => {
+        try {
+          this.validateDepin(assetName, network);
+          return true;
+        } catch (error) {
+          return false;
+        }
+      })());
 
-    // Validate the asset name part (could be ROOT, RESTRICTED, or DEPIN)
-    if (assetName.startsWith('$')) {
-      this.validateRestricted(assetName);
-    } else if (assetName.startsWith('&')) {
-      this.validateDepin(assetName);
-    } else {
-      this.validateRoot(assetName);
+    if (!validBaseName) {
+        throw new InvalidAssetNameError(
+          'Owner name contains invalid characters (Valid characters are: A-Z 0-9 _ .) (special characters can\'t be the first or last characters)',
+          name
+        );
     }
 
     return true;
@@ -343,27 +377,27 @@ class AssetNameValidator {
    * @param {string} name - Asset name
    * @returns {string} Asset type ('ROOT', 'SUB', 'UNIQUE', 'QUALIFIER', 'RESTRICTED', 'DEPIN', 'OWNER')
    */
-  static validateAndDetectType(name) {
+  static validateAndDetectType(name, network) {
     if (name.endsWith('!')) {
-      this.validateOwnerToken(name);
+      this.validateOwnerToken(name, network);
       return 'OWNER';
     } else if (name.startsWith('#')) {
-      this.validateQualifier(name);
+      this.validateQualifier(name, network);
       return name.includes('/') ? 'SUB_QUALIFIER' : 'QUALIFIER';
     } else if (name.startsWith('$')) {
-      this.validateRestricted(name);
+      this.validateRestricted(name, network);
       return 'RESTRICTED';
     } else if (name.startsWith('&')) {
-      this.validateDepin(name);
+      this.validateDepin(name, network);
       return 'DEPIN';
     } else if (name.includes('#')) {
-      this.validateUnique(name);
+      this.validateUnique(name, network);
       return 'UNIQUE';
     } else if (name.includes('/')) {
-      this.validateSub(name);
+      this.validateSub(name, network);
       return 'SUB';
     } else {
-      this.validateRoot(name);
+      this.validateRoot(name, network);
       return 'ROOT';
     }
   }

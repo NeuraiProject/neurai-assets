@@ -53,45 +53,45 @@ const NETWORKS = {
 };
 
 /**
- * Asset naming rules (same for all networks)
+ * Asset naming helpers.
+ * Network-specific maximum lengths are enforced in AssetNameValidator.
  */
 const ASSET_NAME_RULES = {
   ROOT: {
     minLength: 3,
-    maxLength: 30,
+    maxLength: 31,
     pattern: /^[A-Z0-9_.]+$/,
-    cannotStartWith: ['.', 'A', 'Z'],
-    reserved: ['XNA', 'NEURAI']
+    reserved: ['XNA', 'NEURAI', 'NEURAICOIN']
   },
   SUB: {
     minLength: 1,
-    maxLength: 30,
+    maxLength: 31,
     pattern: /^[A-Z0-9_.]+$/,
     separator: '/',
-    maxDepth: 1  // Only one level of sub-assets
+    maxDepth: null
   },
   UNIQUE: {
     minLength: 1,
-    maxLength: 30,
-    pattern: /^[A-Z0-9_.]+$/,
+    maxLength: 32,
+    pattern: /^[-A-Za-z0-9@$%&*()[\]{}_.?:]+$/,
     separator: '#'
   },
   QUALIFIER: {
     minLength: 3,
-    maxLength: 30,
-    pattern: /^[A-Z0-9_]+$/,
+    maxLength: 32,
+    pattern: /^[A-Z0-9_.]+$/,
     prefix: '#',
     separator: '/'
   },
   RESTRICTED: {
     minLength: 3,
-    maxLength: 30,
+    maxLength: 32,
     pattern: /^[A-Z0-9_.]+$/,
     prefix: '$'
   },
   DEPIN: {
     minLength: 3,
-    maxLength: 120,
+    maxLength: 121,
     pattern: /^[A-Z0-9_.]+$/,
     prefix: '&',
     separator: '/'

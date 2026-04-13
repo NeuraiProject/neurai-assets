@@ -24,14 +24,14 @@ describe('Integration: Asset Lifecycle', () => {
     });
 
     it('should validate and parse UNIQUE assets correctly', () => {
-      const assetName = 'MYTOKEN#NFT1';
+      const assetName = 'MYTOKEN#nft-1';
 
       expect(AssetNameValidator.validateUnique(assetName)).to.be.true;
 
       const parsed = AssetNameParser.parse(assetName);
       expect(parsed.type).to.equal(2);
       expect(parsed.parent).to.equal('MYTOKEN');
-      expect(parsed.tag).to.equal('NFT1');
+      expect(parsed.tag).to.equal('nft-1');
     });
 
     it('should validate and parse QUALIFIER assets correctly', () => {

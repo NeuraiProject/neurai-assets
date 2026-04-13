@@ -4,7 +4,7 @@
  *
  * QUALIFIER assets:
  * - KYC/compliance tags (e.g., #KYC_VERIFIED, #ACCREDITED)
- * - Format: #NAME or #ROOT/SUB
+ * - Format: #NAME or #ROOT/#SUB
  * - Cost: 2000 XNA (root) or 200 XNA (sub-qualifier)
  * - Quantity: 1-10 units only
  * - Units: Always 0 (non-divisible)

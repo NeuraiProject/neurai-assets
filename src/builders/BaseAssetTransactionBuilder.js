@@ -211,22 +211,22 @@ class BaseAssetTransactionBuilder {
 
     switch (type) {
       case 'ROOT':
-        AssetNameValidator.validateRoot(assetName);
+        AssetNameValidator.validateRoot(assetName, this.network);
         break;
       case 'SUB':
-        AssetNameValidator.validateSub(assetName);
+        AssetNameValidator.validateSub(assetName, this.network);
         break;
       case 'UNIQUE':
-        AssetNameValidator.validateUnique(assetName);
+        AssetNameValidator.validateUnique(assetName, this.network);
         break;
       case 'QUALIFIER':
-        AssetNameValidator.validateQualifier(assetName);
+        AssetNameValidator.validateQualifier(assetName, this.network);
         break;
       case 'RESTRICTED':
-        AssetNameValidator.validateRestricted(assetName);
+        AssetNameValidator.validateRestricted(assetName, this.network);
         break;
       case 'DEPIN':
-        AssetNameValidator.validateDepin(assetName);
+        AssetNameValidator.validateDepin(assetName, this.network);
         break;
       default:
         throw new Error(`Unknown asset type: ${type}`);

@@ -91,7 +91,7 @@ class NeuraiAssets {
   /**
    * Create a ROOT asset
    * @param {object} params - Asset creation parameters
-   * @param {string} params.assetName - Asset name (3-30 chars, A-Z 0-9 _ .)
+    * @param {string} params.assetName - Asset name (3-31 visible chars on mainnet, A-Z 0-9 _ .)
    * @param {number} params.quantity - Total supply
    * @param {number} [params.units=0] - Decimal places (0-8)
    * @param {boolean} [params.reissuable=true] - Can mint more later

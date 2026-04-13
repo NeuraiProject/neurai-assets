@@ -10,6 +10,7 @@ describe('AssetNameValidator', () => {
   describe('validateRoot', () => {
     it('should validate correct ROOT asset names', () => {
       expect(AssetNameValidator.validateRoot('MYTOKEN')).to.be.true;
+      expect(AssetNameValidator.validateRoot('AMBER')).to.be.true;
       expect(AssetNameValidator.validateRoot('TEST')).to.be.true;
       expect(AssetNameValidator.validateRoot('MY_TOKEN')).to.be.true;
       expect(AssetNameValidator.validateRoot('MY.TOKEN')).to.be.true;
@@ -22,7 +23,7 @@ describe('AssetNameValidator', () => {
     });
 
     it('should reject names that are too long', () => {
-      expect(() => AssetNameValidator.validateRoot('A'.repeat(31)))
+      expect(() => AssetNameValidator.validateRoot('A'.repeat(32)))
         .to.throw(InvalidAssetNameError, 'ROOT asset name must be');
     });
 
@@ -31,26 +32,26 @@ describe('AssetNameValidator', () => {
         .to.throw(InvalidAssetNameError, 'must be uppercase');
     });
 
-    it('should reject names starting with restricted characters', () => {
-      expect(() => AssetNameValidator.validateRoot('ATOKEN'))
-        .to.throw(InvalidAssetNameError, 'cannot start with');
-
-      expect(() => AssetNameValidator.validateRoot('ZTOKEN'))
-        .to.throw(InvalidAssetNameError, 'cannot start with');
-
+    it('should reject names with invalid punctuation placement', () => {
       expect(() => AssetNameValidator.validateRoot('.TOKEN'))
-        .to.throw(InvalidAssetNameError, 'cannot start with');
+        .to.throw(InvalidAssetNameError, 'special characters');
+
+      expect(() => AssetNameValidator.validateRoot('TOKEN.'))
+        .to.throw(InvalidAssetNameError, 'special characters');
+
+      expect(() => AssetNameValidator.validateRoot('MY..TOKEN'))
+        .to.throw(InvalidAssetNameError, 'invalid characters');
     });
 
     it('should reject names with invalid characters', () => {
       expect(() => AssetNameValidator.validateRoot('MY-TOKEN'))
-        .to.throw(InvalidAssetNameError, 'can only contain');
+        .to.throw(InvalidAssetNameError, 'invalid characters');
 
       expect(() => AssetNameValidator.validateRoot('MY TOKEN'))
-        .to.throw(InvalidAssetNameError, 'can only contain');
+        .to.throw(InvalidAssetNameError, 'invalid characters');
 
       expect(() => AssetNameValidator.validateRoot('MY@TOKEN'))
-        .to.throw(InvalidAssetNameError, 'can only contain');
+        .to.throw(InvalidAssetNameError, 'invalid characters');
     });
 
     it('should reject reserved names', () => {
@@ -82,9 +83,8 @@ describe('AssetNameValidator', () => {
         .to.throw(InvalidAssetNameError, 'must be in');
     });
 
-    it('should reject names with multiple separators', () => {
-      expect(() => AssetNameValidator.validateSub('MY/TOKEN/SUB'))
-        .to.throw(InvalidAssetNameError, 'must be in');
+    it('should validate chained sub-assets when all segments are valid', () => {
+      expect(AssetNameValidator.validateSub('TOKEN/ALPHA/BETA')).to.be.true;
     });
 
     it('should reject invalid root parts', () => {
@@ -103,6 +103,8 @@ describe('AssetNameValidator', () => {
       expect(AssetNameValidator.validateUnique('MYTOKEN#NFT1')).to.be.true;
       expect(AssetNameValidator.validateUnique('TEST#ALPHA')).to.be.true;
       expect(AssetNameValidator.validateUnique('TOKEN#123')).to.be.true;
+      expect(AssetNameValidator.validateUnique('TOKEN#nft-1')).to.be.true;
+      expect(AssetNameValidator.validateUnique('TOKEN#Tag:@1')).to.be.true;
     });
 
     it('should reject names without # separator', () => {
@@ -121,8 +123,8 @@ describe('AssetNameValidator', () => {
     });
 
     it('should reject invalid tag parts', () => {
-      expect(() => AssetNameValidator.validateUnique('MYTOKEN#ab'))
-        .to.throw(InvalidAssetNameError, 'must be uppercase');
+      expect(() => AssetNameValidator.validateUnique('MYTOKEN#BAD/TAG'))
+        .to.throw(InvalidAssetNameError, 'Unique name contains invalid characters');
     });
   });
 
@@ -131,11 +133,12 @@ describe('AssetNameValidator', () => {
       expect(AssetNameValidator.validateQualifier('#KYC')).to.be.true;
       expect(AssetNameValidator.validateQualifier('#ACCREDITED')).to.be.true;
       expect(AssetNameValidator.validateQualifier('#TEST_1')).to.be.true;
+      expect(AssetNameValidator.validateQualifier('#KYC.TEST')).to.be.true;
     });
 
     it('should validate correct SUB_QUALIFIER names', () => {
-      expect(AssetNameValidator.validateQualifier('#KYC/TIER1')).to.be.true;
-      expect(AssetNameValidator.validateQualifier('#TEST/ALPHA')).to.be.true;
+      expect(AssetNameValidator.validateQualifier('#KYC/#TIER1')).to.be.true;
+      expect(AssetNameValidator.validateQualifier('#TEST/#ALPHA')).to.be.true;
     });
 
     it('should reject names without # prefix', () => {
@@ -148,9 +151,9 @@ describe('AssetNameValidator', () => {
         .to.throw(InvalidAssetNameError, 'must be uppercase');
     });
 
-    it('should reject qualifiers with invalid characters', () => {
-      expect(() => AssetNameValidator.validateQualifier('#KYC.TEST'))
-        .to.throw(InvalidAssetNameError, 'can only contain');
+    it('should reject sub-qualifiers that do not use the canonical syntax', () => {
+      expect(() => AssetNameValidator.validateQualifier('#KYC/TIER1'))
+        .to.throw(InvalidAssetNameError, 'Qualifier name contains invalid characters');
     });
   });
 
@@ -159,6 +162,7 @@ describe('AssetNameValidator', () => {
       expect(AssetNameValidator.validateRestricted('$SECURITY')).to.be.true;
       expect(AssetNameValidator.validateRestricted('$TOKEN')).to.be.true;
       expect(AssetNameValidator.validateRestricted('$MY_TOKEN')).to.be.true;
+      expect(AssetNameValidator.validateRestricted('$XNA')).to.be.true;
     });
 
     it('should reject names without $ prefix', () => {
@@ -177,6 +181,13 @@ describe('AssetNameValidator', () => {
       expect(AssetNameValidator.validateDepin('&FRANCE')).to.be.true;
       expect(AssetNameValidator.validateDepin('&FRANCE/PARIS')).to.be.true;
       expect(AssetNameValidator.validateDepin('&NODE_1')).to.be.true;
+    });
+
+    it('should enforce testnet-only DEPIN issuance when network is provided', () => {
+      expect(() => AssetNameValidator.validateDepin('&FRANCE', 'xna'))
+        .to.throw(InvalidAssetNameError, 'only available in testnet');
+
+      expect(AssetNameValidator.validateDepin('&FRANCE', 'xna-test')).to.be.true;
     });
 
     it('should reject names without & prefix', () => {
@@ -198,7 +209,7 @@ describe('AssetNameValidator', () => {
   describe('validateOwnerToken', () => {
     it('should validate correct owner token names', () => {
       expect(AssetNameValidator.validateOwnerToken('MYTOKEN!')).to.be.true;
-      expect(AssetNameValidator.validateOwnerToken('$SECURITY!')).to.be.true;
+      expect(AssetNameValidator.validateOwnerToken('SECURITY!')).to.be.true;
       expect(AssetNameValidator.validateOwnerToken('&FRANCE!')).to.be.true;
     });
 
@@ -209,6 +220,9 @@ describe('AssetNameValidator', () => {
 
     it('should reject invalid base names', () => {
       expect(() => AssetNameValidator.validateOwnerToken('ab!'))
+        .to.throw(InvalidAssetNameError);
+
+      expect(() => AssetNameValidator.validateOwnerToken('$SECURITY!'))
         .to.throw(InvalidAssetNameError);
     });
   });
@@ -235,7 +249,7 @@ describe('AssetNameValidator', () => {
     });
 
     it('should detect and validate SUB_QUALIFIER assets', () => {
-      const type = AssetNameValidator.validateAndDetectType('#KYC/TIER1');
+      const type = AssetNameValidator.validateAndDetectType('#KYC/#TIER1');
       expect(type).to.equal('SUB_QUALIFIER');
     });
 
