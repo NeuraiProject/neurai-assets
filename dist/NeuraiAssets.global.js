@@ -4606,24 +4606,47 @@ var NeuraiAssetsBundle = (function (exports) {
 		  }
 
 		  /**
-		   * Convert asset amount to protocol raw units.
-		   * Asset raw quantities in transaction payloads are always encoded with
-		   * 8 decimal places, regardless of the asset's displayed `units`.
+		   * Build the JSON `asset_quantity` value for a `createrawtransaction`
+		   * output (issue / reissue / tag change_quantity / etc.).
+		   *
+		   * The chain parses this field with `AmountFromValue()` (Bitcoin-style
+		   * decimal-XNA → 10^8 sats), then validates that the resulting CAmount
+		   * is a multiple of `10^(8 - units)` via `CheckAmountWithUnits`
+		   * (assets.cpp). So:
+		   *
+		   *   - The JSON value MUST be the user-facing display amount
+		   *     (e.g. "1" for one token, "1.5" for one and a half tokens).
+		   *   - The lib must NOT pre-multiply by 10^8 or 10^units; the daemon
+		   *     does the 10^8 scaling itself, and any extra factor here lands
+		   *     duplicated and inflates the minted supply (or trips the
+		   *     ParseFixedPoint `exponent >= 18` cap → "Invalid amount (3)").
+		   *
+		   * History: pre-1.2.2 multiplied by 10^units (correct only for units=0
+		   * assets, inflated everything else by 10^units). v1.2.2 changed to
+		   * always 10^8 (correct only for units=8, inflated everything else by
+		   * 10^8 — e.g. reissuing 1 token of a units=0 asset minted 100,000,000).
+		   * The right answer is to send the value untouched.
+		   *
+		   * The `units` parameter is kept for API compatibility but is unused.
 		   *
 		   * @param {number} amount - User-facing asset amount
-		   * @param {number} units - Asset decimal places (kept for API compatibility)
-		   * @returns {number} Amount in protocol raw units
+		   * @param {number} units - Asset decimal places (unused; kept for API)
+		   * @returns {number} The user-facing amount, ready for the JSON output
 		   */
 		  toSatoshis(amount, units) {
-		    return Math.round(amount * 100000000);
+		    return amount;
 		  }
 
 		  /**
-		   * Convert protocol raw units back to a user-facing asset amount.
+		   * Convert a chain-side asset balance / UTXO satoshis value back to a
+		   * user-facing amount. The chain consistently encodes asset balances
+		   * in 10^8 sats (because everything goes through AmountFromValue on
+		   * the way in), so the divisor is always 10^8 — independent of the
+		   * asset's `units`.
 		   *
-		   * @param {number} satoshis - Amount in protocol raw units
-		   * @param {number} units - Asset decimal places (kept for API compatibility)
-		   * @returns {number} Amount in asset units
+		   * @param {number} satoshis - Chain value in 10^8 sats
+		   * @param {number} units - Asset decimal places (unused; kept for API)
+		   * @returns {number} User-facing asset amount
 		   */
 		  fromSatoshis(satoshis, units) {
 		    return satoshis / 100000000;

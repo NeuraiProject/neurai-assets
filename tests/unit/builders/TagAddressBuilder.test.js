@@ -71,7 +71,10 @@ describe('TagAddressBuilder', () => {
     expect(tagOutput).to.not.equal(undefined);
     expect(tagOutput[TEST_ADDRESS].tag_addresses).to.deep.include({
       qualifier: '#KYC',
-      change_quantity: 900000000
+      // UTXO has satoshis=900000000 (= 9 qualifier tokens in 10^8-sats encoding);
+      // change_quantity is sent as the user-facing display value (9), and the
+      // daemon multiplies by 10^8 via AmountFromValue.
+      change_quantity: 9
     });
   });
 });

@@ -58,11 +58,13 @@ describe('IssueQualifierBuilder', () => {
     expect(qualifierOutput).to.not.equal(undefined);
     expect(qualifierOutput[TEST_ADDRESS].issue_qualifier).to.deep.include({
       asset_name: '#UIEIR',
-      asset_quantity: 500000000
+      // The user-facing display value (5 qualifier tokens). The daemon
+      // multiplies by 10^8 internally to get sats.
+      asset_quantity: 5
     });
   });
 
-  it('should serialize root asset quantities in base units regardless of asset units', async () => {
+  it('should serialize root asset quantities as the user-facing display value', async () => {
     let capturedOutputs;
 
     const rpc = async (method, params = []) => {
@@ -115,7 +117,10 @@ describe('IssueQualifierBuilder', () => {
     expect(issueOutput).to.not.equal(undefined);
     expect(issueOutput[TEST_ADDRESS].issue).to.deep.include({
       asset_name: 'UIEIR',
-      asset_quantity: 100000000000,
+      // Sent as the user-facing display value; the daemon's AmountFromValue
+      // multiplies by 10^8 to get sats, and CheckAmountWithUnits validates
+      // against the asset's `units` (here 2 → must be a multiple of 10^6 sats).
+      asset_quantity: 1000,
       units: 2
     });
   });

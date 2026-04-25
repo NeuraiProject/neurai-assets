@@ -24,6 +24,31 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 | **RESTRICTED** | `$SECURITY` | 3000 XNA | Security token with compliance |
 | **DEPIN** | `&DEVICE` or `&DEVICE/ROUTER001` | 10 XNA | Soulbound asset with holder validity controls |
 
+## Quantities and asset units
+
+Every `quantity` / `asset_quantity` parameter accepted by this library is a
+**user-facing display amount** — the same number a human would write to mean
+"this many tokens". For an asset with `units = 2`, `quantity: 10.50` means
+ten and a half tokens; for an asset with `units = 0`, `quantity: 1` means
+one whole token.
+
+Internally the daemon parses the JSON `asset_quantity` field with
+`AmountFromValue` ([Bitcoin-style decimal → 10⁸ sats][amount-from-value])
+and validates that the resulting CAmount is a multiple of `10^(8 − units)`
+via `CheckAmountWithUnits`. Because the chain already does the ×10⁸ scaling
+itself, **the library must NOT pre-multiply** the value. Sending the raw
+display number is the only correct behavior; any extra factor on the wire
+either silently inflates the minted supply (`× 10⁸ → 100,000,000` tokens
+where the user asked for 1) or trips the daemon's
+`ParseFixedPoint` cap with `Invalid amount (3): …`.
+
+This was regressed in `1.2.2`/`1.3.x` (a hardcoded `× 10⁸` was added to
+`BaseAssetTransactionBuilder.toSatoshis`) and fixed in the version after
+`1.3.1`. If you write a custom builder, follow the same convention: pass
+the user amount through unchanged, let the daemon scale.
+
+[amount-from-value]: https://github.com/NeuraiProject/Neurai-DePIN/blob/main/src/rpc/server.cpp
+
 ## Installation
 
 ```bash
@@ -105,8 +130,9 @@ const assetsPQ = new NeuraiAssets(rpc, {
 ```javascript
 const result = await assets.createRootAsset({
   assetName: 'MYTOKEN',
-  quantity: 1000000,      // Total supply
-  units: 2,                // Decimals (0-8)
+  quantity: 1000000,      // Total supply, in display units (1,000,000 tokens)
+  units: 2,                // Decimal precision (0–8). With units=2, fractional
+                           // values down to 0.01 are allowed.
   reissuable: true,        // Allow reissuance
   hasIpfs: true,
   ipfsHash: 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'
@@ -131,11 +157,17 @@ const result = await assets.createSubAsset({
 // Requires the asset's owner token (MYTOKEN!)
 const result = await assets.reissueAsset({
   assetName: 'MYTOKEN',
-  quantity: 500000,        // Additional amount to mint
+  quantity: 500000,        // Additional amount to mint, in display units.
+                           // For an asset with units=0, `quantity: 1`
+                           // mints exactly 1 token (NOT 100,000,000).
   reissuable: true,        // false = lock supply permanently
-  newIpfs: 'Qm...'        // Update IPFS (optional)
+  newIpfs: 'Qm...'         // Update IPFS (optional)
 });
 ```
+
+> **Note**: `units` cannot be passed to `reissueAsset` — the chain inherits
+> the asset's existing precision (use `new_units` in the raw output if you
+> ever need to change it, but this library doesn't expose that today).
 
 ### Create DEPIN Asset
 
@@ -465,7 +497,7 @@ The library automatically validates that the owner token is returned in each ope
 | Reissue ROOT/SUB | 200 |
 | Reissue DEPIN | 200 |
 | Reissue RESTRICTED | 200 |
-| Tag/Untag address | 0.1 (per address) |
+| Tag/Untag address | 0 (network fee only; spends 1 unit of the qualifier per address) |
 | Freeze/Unfreeze address | 0 (network fee only) |
 | Freeze/Unfreeze global | 0 (network fee only) |
 
@@ -476,7 +508,7 @@ The library automatically validates that the owner token is returned in each ope
 The library validates client-side:
 
 ✅ Asset names (format, length, allowed characters)
-✅ Amounts (not exceeding max supply of 21 billion)
+✅ Amounts (not exceeding max supply of 21 billion display tokens)
 ✅ Decimals (0-8)
 ✅ IPFS hashes (valid format)
 ✅ Verifier strings (boolean logic syntax)
@@ -484,6 +516,11 @@ The library validates client-side:
 ✅ Required owner tokens
 ✅ Owner tokens returned (prevents loss)
 ✅ Address prefixes by network
+
+The daemon also enforces server-side that quantities respect the asset's
+precision (`CheckAmountWithUnits` — see [Quantities and asset units](#quantities-and-asset-units)),
+so e.g. trying to issue `0.1` of a `units=0` asset is rejected with
+`min-qty-not-multiple-of-units` regardless of what the client sent.
 
 ## Network Configuration
 
