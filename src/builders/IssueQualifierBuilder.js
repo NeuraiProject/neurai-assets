@@ -129,8 +129,8 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     const changeAddress = await this.getChangeAddress();
 
     // 7. Estimate fee
-    const outputCount = 3;
-    const estimatedFee = await this.estimateFee(2, outputCount);
+    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
+    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
     // 8. Calculate total XNA needed
     const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -140,9 +140,9 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    // 10. Recalculate fee with actual input count
-    const actualInputCount = baseCurrencyUTXOs.length + parentQualifierUTXOs.length;
-    const actualFee = await this.estimateFee(actualInputCount, outputCount);
+    // 10. Recalculate fee with actual inputs (PQ-aware), including parent qualifier UTXOs
+    const actualFeeInputs = [...baseCurrencyUTXOs, ...parentQualifierUTXOs];
+    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
     // 11. Verify we have enough XNA
     const totalRequired = burnInfo.amount + actualFee;

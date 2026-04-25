@@ -2727,6 +2727,118 @@ function requireOwnerTokenManager () {
 }
 
 /**
+ * Fee / size helpers for Neurai transactions.
+ *
+ * These constants and classifiers are the same ones exposed by
+ * `@neuraiproject/neurai-sign-transaction` (`VBYTES`, `isPQAddress`,
+ * `isPQScript`, `estimateInputVbytes`, `estimateOutputBytes`,
+ * `estimateTransactionVbytes`). They are inlined here to keep the assets
+ * package light: depending on the full signer would pull `bitcoinjs-lib`
+ * and `@noble/post-quantum` into the IIFE / browser bundles, which is far
+ * more weight than the few constants we actually need for fee estimation.
+ *
+ * SOURCE OF TRUTH: `@neuraiproject/neurai-sign-transaction` `src/estimate.ts`.
+ * Keep these values in sync with the signer's `VBYTES`. Mismatches surface
+ * immediately as `min relay fee not met` failures from the node.
+ */
+
+var feeSizing;
+var hasRequiredFeeSizing;
+
+function requireFeeSizing () {
+	if (hasRequiredFeeSizing) return feeSizing;
+	hasRequiredFeeSizing = 1;
+	/** Per-component byte sizes used across the Neurai stack for fee estimation. */
+	const VBYTES = Object.freeze({
+	  /** Raw transaction overhead: version (4) + in-count varint (1) + out-count varint (1) + locktime (4). */
+	  baseTxOverheadBytes: 10,
+	  /** Extra weight contributed by the segwit marker + flag bytes when any input is PQ. */
+	  segwitMarkerVbytes: 1,
+	  /** vbytes for a typical legacy P2PKH input (worst-case scriptSig). */
+	  legacyInputVbytes: 148,
+	  /** vbytes for a typical PQ AuthScript input with the default OP_TRUE witnessScript. */
+	  pqInputVbytes: 977,
+	  /** Bytes of a legacy P2PKH output (8-byte value + 1-byte script length + 25-byte scriptPubKey). */
+	  legacyOutputBytes: 34,
+	  /** Bytes of an AuthScript-v1 output (8-byte value + 1-byte script length + 34-byte scriptPubKey). */
+	  pqOutputBytes: 43,
+	});
+
+	/** True for Neurai PQ AuthScript bech32 destinations (`nq1…` mainnet, `tnq1…` testnet). */
+	function isPQAddress(address) {
+	  return (
+	    typeof address === 'string' &&
+	    (address.startsWith('nq1') || address.startsWith('tnq1'))
+	  );
+	}
+
+	/** True for AuthScript-v1 scriptPubKey hex (witness v1, 32-byte program — `5120…`). */
+	function isPQScript(scriptHex) {
+	  if (typeof scriptHex !== 'string' || scriptHex.length < 4) return false;
+	  return scriptHex.toLowerCase().startsWith('5120');
+	}
+
+	/**
+	 * Estimate the vbytes contributed by spending one UTXO. Uses the UTXO's
+	 * `script` if available, otherwise falls back to its `address`. Unknown
+	 * prevouts are treated as legacy.
+	 */
+	function estimateInputVbytes(utxo) {
+	  const script = utxo && utxo.script;
+	  if (typeof script === 'string' && script.length > 0) {
+	    return isPQScript(script) ? VBYTES.pqInputVbytes : VBYTES.legacyInputVbytes;
+	  }
+	  const address = utxo && utxo.address;
+	  if (typeof address === 'string' && isPQAddress(address)) {
+	    return VBYTES.pqInputVbytes;
+	  }
+	  return VBYTES.legacyInputVbytes;
+	}
+
+	/** Estimate the bytes contributed by an output (address string or `{address}`). */
+	function estimateOutputBytes(target) {
+	  const address =
+	    typeof target === 'string' ? target : (target && target.address) || '';
+	  return isPQAddress(address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
+	}
+
+	/**
+	 * Sum the per-input/per-output contributions, plus base overhead and segwit
+	 * marker (added once when any input is PQ). Inputs may be partial UTXO-like
+	 * objects with `script` and/or `address`. Outputs may be address strings or
+	 * `{ address }` descriptors.
+	 */
+	function estimateTransactionVbytes(inputs, outputs) {
+	  let vbytes = VBYTES.baseTxOverheadBytes;
+	  let hasPQInput = false;
+
+	  for (const inp of inputs) {
+	    const v = estimateInputVbytes(inp);
+	    vbytes += v;
+	    if (v === VBYTES.pqInputVbytes) hasPQInput = true;
+	  }
+
+	  for (const out of outputs) {
+	    vbytes += estimateOutputBytes(out);
+	  }
+
+	  if (hasPQInput) vbytes += VBYTES.segwitMarkerVbytes;
+
+	  return vbytes;
+	}
+
+	feeSizing = {
+	  VBYTES,
+	  isPQAddress,
+	  isPQScript,
+	  estimateInputVbytes,
+	  estimateOutputBytes,
+	  estimateTransactionVbytes,
+	};
+	return feeSizing;
+}
+
+/**
  * UTXO Selector
  * Selects appropriate UTXOs for asset transactions
  *
@@ -2743,6 +2855,7 @@ function requireUTXOSelector () {
 	if (hasRequiredUTXOSelector) return UTXOSelector_1;
 	hasRequiredUTXOSelector = 1;
 	const { InsufficientFundsError } = requireErrors();
+	const { estimateTransactionVbytes } = requireFeeSizing();
 
 	class UTXOSelector {
 	  /**
@@ -2981,35 +3094,44 @@ function requireUTXOSelector () {
 	  }
 
 	  /**
-	   * Estimate transaction size in bytes
-	   * Used for fee calculation
+	   * Estimate transaction size in vbytes for fee calculation.
 	   *
-	   * @param {number} inputCount - Number of inputs
-	   * @param {number} outputCount - Number of outputs
-	   * @returns {number} Estimated size in bytes
+	   * Both arguments accept either a count (legacy callers) or an array of
+	   * descriptors that allow the estimator to distinguish PQ AuthScript
+	   * inputs/outputs from legacy P2PKH ones — PQ inputs are roughly six
+	   * times larger than legacy inputs and would otherwise underflow the
+	   * node's `min relay fee`.
+	   *
+	   * Input descriptors may be UTXO-like objects with `script` and/or
+	   * `address`. Output descriptors may be address strings or `{ address }`.
+	   * When a count is provided instead of an array, every input/output is
+	   * treated as legacy.
+	   *
+	   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+	   * @param {number|Array} outputs - Output count or array of address-like descriptors
+	   * @returns {number} Estimated vbytes
 	   */
-	  estimateTransactionSize(inputCount, outputCount) {
-	    // Rough estimation:
-	    // - Each input: ~180 bytes
-	    // - Each output: ~34 bytes
-	    // - Transaction overhead: ~10 bytes
-	    const inputSize = inputCount * 180;
-	    const outputSize = outputCount * 34;
-	    const overhead = 10;
-
-	    return inputSize + outputSize + overhead;
+	  estimateTransactionSize(inputs, outputs) {
+	    const inputDescriptors = Array.isArray(inputs)
+	      ? inputs
+	      : new Array(inputs).fill({});
+	    const outputDescriptors = Array.isArray(outputs)
+	      ? outputs
+	      : new Array(outputs).fill({});
+	    return estimateTransactionVbytes(inputDescriptors, outputDescriptors);
 	  }
 
 	  /**
-	   * Estimate fee for a transaction
-	   * @param {number} inputCount - Number of inputs
-	   * @param {number} outputCount - Number of outputs
+	   * Estimate fee for a transaction.
+	   *
+	   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+	   * @param {number|Array} outputs - Output count or array of address-like descriptors
 	   * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
 	   * @returns {number} Estimated fee in XNA
 	   */
-	  estimateFee(inputCount, outputCount, feeRate = 0.015) {
-	    const sizeBytes = this.estimateTransactionSize(inputCount, outputCount);
-	    const sizeKB = sizeBytes / 1000;
+	  estimateFee(inputs, outputs, feeRate = 0.015) {
+	    const sizeVbytes = this.estimateTransactionSize(inputs, outputs);
+	    const sizeKB = sizeVbytes / 1000;
 	    const fee = sizeKB * feeRate;
 
 	    // Round up to 8 decimals
@@ -4331,14 +4453,20 @@ function requireBaseAssetTransactionBuilder () {
 	  }
 
 	  /**
-	   * Estimate transaction fee
-	   * @param {number} inputCount - Number of inputs
-	   * @param {number} outputCount - Number of outputs
+	   * Estimate transaction fee.
+	   *
+	   * Both arguments accept either a count (legacy) or an array of descriptors
+	   * that lets the underlying estimator distinguish PQ AuthScript inputs/outputs
+	   * from legacy P2PKH ones. Pass arrays whenever you have actual UTXOs and
+	   * output addresses on hand — counts produce a legacy-only estimate.
+	   *
+	   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+	   * @param {number|Array} outputs - Output count or array of address-like descriptors
 	   * @returns {Promise<number>} Estimated fee in XNA
 	   */
-	  async estimateFee(inputCount, outputCount) {
+	  async estimateFee(inputs, outputs) {
 	    const feeRate = await this.utxoSelector.getFeeRate();
-	    return this.utxoSelector.estimateFee(inputCount, outputCount, feeRate);
+	    return this.utxoSelector.estimateFee(inputs, outputs, feeRate);
 	  }
 
 	  /**
@@ -4800,7 +4928,8 @@ function requireIssueRootBuilder () {
 	    const changeAddress = await this.getChangeAddress();
 
 	    // 5. Estimate fee (rough estimate for initial UTXO selection)
-	    const estimatedFee = await this.estimateFee(1, 3);
+	    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
+	    const estimatedFee = await this.estimateFee(1, outputAddresses);
 
 	    // 6. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -4810,8 +4939,8 @@ function requireIssueRootBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 8. Recalculate fee with actual input count
-	    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length, 3);
+	    // 8. Recalculate fee with actual inputs (PQ-aware)
+	    const actualFee = await this.estimateFee(baseCurrencyUTXOs, outputAddresses);
 
 	    // 9. Verify we still have enough after fee recalculation
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -5035,7 +5164,13 @@ function requireIssueSubBuilder () {
 	    // 8. Estimate fee
 	    // Inputs: XNA UTXOs + owner token UTXO
 	    // Outputs: burn + change + owner token return + issue operation
-	    const estimatedFee = await this.estimateFee(2, 4);
+	    const outputAddresses = [
+	      burnInfo.address,
+	      changeAddress,
+	      changeAddress, // owner token return goes to change address
+	      toAddress,
+	    ];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 9. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -5045,9 +5180,9 @@ function requireIssueSubBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 11. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-	    const actualFee = await this.estimateFee(actualInputCount, 4);
+	    // 11. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 12. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -5249,14 +5384,15 @@ function requireIssueDepinBuilder () {
 	    const toAddress = await this.getToAddress();
 	    const changeAddress = await this.getChangeAddress();
 
-	    const estimatedFee = await this.estimateFee(1, 3);
+	    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
+	    const estimatedFee = await this.estimateFee(1, outputAddresses);
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
 
 	    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length, 3);
+	    const actualFee = await this.estimateFee(baseCurrencyUTXOs, outputAddresses);
 	    const totalRequired = burnInfo.amount + actualFee;
 
 	    if (totalXNAInput < totalRequired) {
@@ -5471,9 +5607,14 @@ function requireReissueBuilder () {
 
 	    // 8. Estimate fee
 	    // Inputs: XNA UTXOs + owner token UTXO
-	    // Outputs: burn + change + reissue operation
-	    // (node auto-generates owner token return from the reissue entry, total = 4 physical outputs)
-	    const estimatedFee = await this.estimateFee(2, 4);
+	    // Outputs: burn + change + owner token return + reissue operation
+	    const outputAddresses = [
+	      burnInfo.address,
+	      changeAddress,
+	      changeAddress, // owner token return goes to change address
+	      toAddress,
+	    ];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 9. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -5483,9 +5624,9 @@ function requireReissueBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 11. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-	    const actualFee = await this.estimateFee(actualInputCount, 4);
+	    // 11. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 12. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -5746,7 +5887,13 @@ function requireIssueUniqueBuilder () {
 	    // 7. Estimate fee
 	    // Inputs: XNA UTXOs + owner token UTXO
 	    // Outputs: burn + change + owner token return + issue_unique operation
-	    const estimatedFee = await this.estimateFee(2, 4);
+	    const outputAddresses = [
+	      burnInfo.address,
+	      changeAddress,
+	      changeAddress, // owner token return goes to change address
+	      toAddress,
+	    ];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 8. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -5756,9 +5903,9 @@ function requireIssueUniqueBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 10. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-	    const actualFee = await this.estimateFee(actualInputCount, 4);
+	    // 10. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 11. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -6006,8 +6153,8 @@ function requireIssueQualifierBuilder () {
 	    const changeAddress = await this.getChangeAddress();
 
 	    // 7. Estimate fee
-	    const outputCount = 3;
-	    const estimatedFee = await this.estimateFee(2, outputCount);
+	    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 8. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -6017,9 +6164,9 @@ function requireIssueQualifierBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 10. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + parentQualifierUTXOs.length;
-	    const actualFee = await this.estimateFee(actualInputCount, outputCount);
+	    // 10. Recalculate fee with actual inputs (PQ-aware), including parent qualifier UTXOs
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ...parentQualifierUTXOs];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 11. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -6258,7 +6405,13 @@ function requireIssueRestrictedBuilder () {
 	    }
 
 	    // 7. Estimate fee (+1 for owner token input)
-	    const estimatedFee = await this.estimateFee(2, 4);
+	    const outputAddresses = [
+	      burnInfo.address,
+	      changeAddress,
+	      changeAddress, // owner token return goes to change address
+	      toAddress,
+	    ];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 8. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -6268,8 +6421,9 @@ function requireIssueRestrictedBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 10. Recalculate fee with actual input count (+1 for owner token)
-	    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length + 1, 4);
+	    // 10. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 11. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -6526,7 +6680,13 @@ function requireReissueRestrictedBuilder () {
 	    const burnInfo = this.burnManager.getReissueBurn();
 
 	    // 8. Estimate fee
-	    const estimatedFee = await this.estimateFee(2, 4);
+	    const outputAddresses = [
+	      burnInfo.address,
+	      changeAddress,
+	      changeAddress, // owner token return goes to change address
+	      toAddress,
+	    ];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 9. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -6536,9 +6696,9 @@ function requireReissueRestrictedBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 11. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-	    const actualFee = await this.estimateFee(actualInputCount, 4);
+	    // 11. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 12. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -6773,7 +6933,9 @@ function requireTagAddressBuilder () {
 	      : this.burnManager.getTagAddressBurn(addressCount);
 
 	    // 6. Estimate fee
-	    const estimatedFee = await this.estimateFee(2, 3);
+	    // Outputs: burn + XNA change + tag/untag operation (sent to changeAddress)
+	    const outputAddresses = [burnInfo.address, changeAddress, changeAddress];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 7. Calculate total XNA needed
 	    const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -6783,9 +6945,9 @@ function requireTagAddressBuilder () {
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 9. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + qualifierUTXOs.length;
-	    const actualFee = await this.estimateFee(actualInputCount, 3);
+	    // 9. Recalculate fee with actual inputs (PQ-aware), including qualifier UTXOs
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ...qualifierUTXOs];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 10. Verify we have enough XNA
 	    const totalRequired = burnInfo.amount + actualFee;
@@ -7020,16 +7182,18 @@ function requireFreezeAddressBuilder () {
 	    const burnAmount = 0;
 
 	    // 6. Estimate fee
-	    const estimatedFee = await this.estimateFee(2, 3);
+	    // Outputs: XNA change + freeze/unfreeze operation (sent to changeAddress)
+	    const outputAddresses = [changeAddress, changeAddress];
+	    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
 	    // 7. Select XNA UTXOs (only for fee, no burn)
 	    const utxoSelection = await this.selectUTXOs(estimatedFee, null, 0);
 	    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
 	    const totalXNAInput = utxoSelection.totalXNA;
 
-	    // 8. Recalculate fee with actual input count
-	    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-	    const actualFee = await this.estimateFee(actualInputCount, 3);
+	    // 8. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+	    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+	    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
 	    // 9. Verify we have enough XNA for fee
 	    if (totalXNAInput < actualFee) {

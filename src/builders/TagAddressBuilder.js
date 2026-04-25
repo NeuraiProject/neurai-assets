@@ -105,7 +105,9 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
       : this.burnManager.getTagAddressBurn(addressCount);
 
     // 6. Estimate fee
-    const estimatedFee = await this.estimateFee(2, 3);
+    // Outputs: burn + XNA change + tag/untag operation (sent to changeAddress)
+    const outputAddresses = [burnInfo.address, changeAddress, changeAddress];
+    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
     // 7. Calculate total XNA needed
     const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -115,9 +117,9 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    // 9. Recalculate fee with actual input count
-    const actualInputCount = baseCurrencyUTXOs.length + qualifierUTXOs.length;
-    const actualFee = await this.estimateFee(actualInputCount, 3);
+    // 9. Recalculate fee with actual inputs (PQ-aware), including qualifier UTXOs
+    const actualFeeInputs = [...baseCurrencyUTXOs, ...qualifierUTXOs];
+    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
     // 10. Verify we have enough XNA
     const totalRequired = burnInfo.amount + actualFee;

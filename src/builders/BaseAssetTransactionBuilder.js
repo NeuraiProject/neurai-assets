@@ -103,14 +103,20 @@ class BaseAssetTransactionBuilder {
   }
 
   /**
-   * Estimate transaction fee
-   * @param {number} inputCount - Number of inputs
-   * @param {number} outputCount - Number of outputs
+   * Estimate transaction fee.
+   *
+   * Both arguments accept either a count (legacy) or an array of descriptors
+   * that lets the underlying estimator distinguish PQ AuthScript inputs/outputs
+   * from legacy P2PKH ones. Pass arrays whenever you have actual UTXOs and
+   * output addresses on hand — counts produce a legacy-only estimate.
+   *
+   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+   * @param {number|Array} outputs - Output count or array of address-like descriptors
    * @returns {Promise<number>} Estimated fee in XNA
    */
-  async estimateFee(inputCount, outputCount) {
+  async estimateFee(inputs, outputs) {
     const feeRate = await this.utxoSelector.getFeeRate();
-    return this.utxoSelector.estimateFee(inputCount, outputCount, feeRate);
+    return this.utxoSelector.estimateFee(inputs, outputs, feeRate);
   }
 
   /**

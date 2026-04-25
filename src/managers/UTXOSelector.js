@@ -9,6 +9,7 @@
  */
 
 const { InsufficientFundsError } = require('../errors');
+const { estimateTransactionVbytes } = require('../utils/feeSizing');
 
 class UTXOSelector {
   /**
@@ -247,35 +248,44 @@ class UTXOSelector {
   }
 
   /**
-   * Estimate transaction size in bytes
-   * Used for fee calculation
+   * Estimate transaction size in vbytes for fee calculation.
    *
-   * @param {number} inputCount - Number of inputs
-   * @param {number} outputCount - Number of outputs
-   * @returns {number} Estimated size in bytes
+   * Both arguments accept either a count (legacy callers) or an array of
+   * descriptors that allow the estimator to distinguish PQ AuthScript
+   * inputs/outputs from legacy P2PKH ones — PQ inputs are roughly six
+   * times larger than legacy inputs and would otherwise underflow the
+   * node's `min relay fee`.
+   *
+   * Input descriptors may be UTXO-like objects with `script` and/or
+   * `address`. Output descriptors may be address strings or `{ address }`.
+   * When a count is provided instead of an array, every input/output is
+   * treated as legacy.
+   *
+   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+   * @param {number|Array} outputs - Output count or array of address-like descriptors
+   * @returns {number} Estimated vbytes
    */
-  estimateTransactionSize(inputCount, outputCount) {
-    // Rough estimation:
-    // - Each input: ~180 bytes
-    // - Each output: ~34 bytes
-    // - Transaction overhead: ~10 bytes
-    const inputSize = inputCount * 180;
-    const outputSize = outputCount * 34;
-    const overhead = 10;
-
-    return inputSize + outputSize + overhead;
+  estimateTransactionSize(inputs, outputs) {
+    const inputDescriptors = Array.isArray(inputs)
+      ? inputs
+      : new Array(inputs).fill({});
+    const outputDescriptors = Array.isArray(outputs)
+      ? outputs
+      : new Array(outputs).fill({});
+    return estimateTransactionVbytes(inputDescriptors, outputDescriptors);
   }
 
   /**
-   * Estimate fee for a transaction
-   * @param {number} inputCount - Number of inputs
-   * @param {number} outputCount - Number of outputs
+   * Estimate fee for a transaction.
+   *
+   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+   * @param {number|Array} outputs - Output count or array of address-like descriptors
    * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
    * @returns {number} Estimated fee in XNA
    */
-  estimateFee(inputCount, outputCount, feeRate = 0.015) {
-    const sizeBytes = this.estimateTransactionSize(inputCount, outputCount);
-    const sizeKB = sizeBytes / 1000;
+  estimateFee(inputs, outputs, feeRate = 0.015) {
+    const sizeVbytes = this.estimateTransactionSize(inputs, outputs);
+    const sizeKB = sizeVbytes / 1000;
     const fee = sizeKB * feeRate;
 
     // Round up to 8 decimals

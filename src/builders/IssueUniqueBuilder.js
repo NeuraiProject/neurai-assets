@@ -140,7 +140,13 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     // 7. Estimate fee
     // Inputs: XNA UTXOs + owner token UTXO
     // Outputs: burn + change + owner token return + issue_unique operation
-    const estimatedFee = await this.estimateFee(2, 4);
+    const outputAddresses = [
+      burnInfo.address,
+      changeAddress,
+      changeAddress, // owner token return goes to change address
+      toAddress,
+    ];
+    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
     // 8. Calculate total XNA needed
     const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -150,9 +156,9 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    // 10. Recalculate fee with actual input count
-    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-    const actualFee = await this.estimateFee(actualInputCount, 4);
+    // 10. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
     // 11. Verify we have enough XNA
     const totalRequired = burnInfo.amount + actualFee;

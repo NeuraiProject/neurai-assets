@@ -86,7 +86,8 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
     const changeAddress = await this.getChangeAddress();
 
     // 5. Estimate fee (rough estimate for initial UTXO selection)
-    const estimatedFee = await this.estimateFee(1, 3);
+    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
+    const estimatedFee = await this.estimateFee(1, outputAddresses);
 
     // 6. Calculate total XNA needed
     const totalXNANeeded = burnInfo.amount + estimatedFee;
@@ -96,8 +97,8 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    // 8. Recalculate fee with actual input count
-    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length, 3);
+    // 8. Recalculate fee with actual inputs (PQ-aware)
+    const actualFee = await this.estimateFee(baseCurrencyUTXOs, outputAddresses);
 
     // 9. Verify we still have enough after fee recalculation
     const totalRequired = burnInfo.amount + actualFee;

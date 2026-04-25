@@ -100,16 +100,18 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     const burnAmount = 0;
 
     // 6. Estimate fee
-    const estimatedFee = await this.estimateFee(2, 3);
+    // Outputs: XNA change + freeze/unfreeze operation (sent to changeAddress)
+    const outputAddresses = [changeAddress, changeAddress];
+    const estimatedFee = await this.estimateFee(2, outputAddresses);
 
     // 7. Select XNA UTXOs (only for fee, no burn)
     const utxoSelection = await this.selectUTXOs(estimatedFee, null, 0);
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    // 8. Recalculate fee with actual input count
-    const actualInputCount = baseCurrencyUTXOs.length + 1; // +1 for owner token
-    const actualFee = await this.estimateFee(actualInputCount, 3);
+    // 8. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
+    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
+    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
 
     // 9. Verify we have enough XNA for fee
     if (totalXNAInput < actualFee) {

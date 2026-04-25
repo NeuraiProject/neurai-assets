@@ -75,14 +75,15 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
-    const estimatedFee = await this.estimateFee(1, 3);
+    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
+    const estimatedFee = await this.estimateFee(1, outputAddresses);
     const totalXNANeeded = burnInfo.amount + estimatedFee;
 
     const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
     const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
     const totalXNAInput = utxoSelection.totalXNA;
 
-    const actualFee = await this.estimateFee(baseCurrencyUTXOs.length, 3);
+    const actualFee = await this.estimateFee(baseCurrencyUTXOs, outputAddresses);
     const totalRequired = burnInfo.amount + actualFee;
 
     if (totalXNAInput < totalRequired) {

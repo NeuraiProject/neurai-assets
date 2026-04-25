@@ -651,3 +651,48 @@ console.log('Transaction ID:', txid);
 For AuthScript wallets, derive addresses externally with `neurai-key`, then initialize
 `NeuraiAssets` with those `nq1...` / `tnq1...` addresses. The recommended network labels
 are `xna` and `xna-test`; `xna-pq` and `xna-pq-test` remain available as compatibility aliases.
+
+## Fee estimation (PQ-aware)
+
+Asset transactions are usually built with one or two XNA inputs plus, depending on the operation, an owner-token or qualifier UTXO. The library estimates the fee twice per build: a rough pre-estimate to size the initial XNA selection, and a final estimate once the actual UTXOs are known.
+
+Both estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) and distinguish PQ AuthScript inputs/outputs from legacy P2PKH ones. PQ inputs spend ~977 vbytes vs ~148 for legacy — without this distinction, transactions built from PQ addresses fall under the node's `min relay fee` and are rejected with `code -26: min relay fee not met`.
+
+You should not need to call these helpers directly; they are wired into every builder. They are documented here so you can audit the fee math or use the same constants if you compose transactions outside the standard builder flow.
+
+```js
+const {
+  VBYTES,
+  estimateInputVbytes,
+  estimateOutputBytes,
+  estimateTransactionVbytes,
+  isPQAddress,
+  isPQScript,
+} = require('@neuraiproject/neurai-assets/src/utils/feeSizing');
+
+VBYTES.legacyInputVbytes; // 148
+VBYTES.pqInputVbytes;     // 977
+VBYTES.legacyOutputBytes; // 34
+VBYTES.pqOutputBytes;     // 43
+
+estimateInputVbytes({ script: '5120…' });        // 977
+estimateInputVbytes({ address: 'nq1…' });        // 977
+estimateInputVbytes({ address: 'mgRYHdMq…' });   // 148
+estimateOutputBytes('tnq1…');                    // 43
+
+const vbytes = estimateTransactionVbytes(
+  [{ script: '5120…' }, { address: 'mgRYHdMq…' }],   // 1 PQ + 1 legacy input
+  ['nq1qchange…', 'mgRYHdMqburn…'],                  // 1 PQ + 1 legacy output
+);
+```
+
+The constants mirror those exported from `@neuraiproject/neurai-sign-transaction` (`VBYTES`). They are inlined here on purpose: depending on the full signer would pull `bitcoinjs-lib` and `@noble/post-quantum` into the IIFE / browser bundles, far more weight than these constants need. The signer remains the source of truth — if it ever bumps a vbytes value, this file must follow.
+
+### Limitations
+
+The estimator assumes the most common spend layout for every input:
+
+- legacy inputs → P2PKH `scriptSig` worst case (DER signature + compressed pubkey)
+- PQ inputs → AuthScript v1 with the **default** `OP_TRUE` `witnessScript` and **no** `functionalArgs`
+
+That covers all standard asset operations. If you build transactions whose PQ inputs use covenant `witnessScript`s, NoAuth (`authType=0x00`) or Legacy AuthScript (`authType=0x02`) witnesses, compute the witness size yourself and add it to the result of `estimateTransactionVbytes` (or use `estimateVirtualSize` from `@neuraiproject/neurai-sign-transaction` after building the raw transaction, which fills dummy witnesses of the worst-case size and returns the exact post-signing vsize).
