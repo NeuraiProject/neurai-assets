@@ -656,6 +656,8 @@ are `xna` and `xna-test`; `xna-pq` and `xna-pq-test` remain available as compati
 
 Asset transactions are usually built with one or two XNA inputs plus, depending on the operation, an owner-token or qualifier UTXO. The library estimates the fee twice per build: a rough pre-estimate to size the initial XNA selection, and a final estimate once the actual UTXOs are known.
 
+Both estimates share a single `estimatesmartfee` lookup. The fee rate is stable for the lifetime of one build, so it is fetched on the first `estimateFee` call and cached on the builder instance for the second — half as many RPC round trips as before `1.3.1`.
+
 Both estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) and distinguish PQ AuthScript inputs/outputs from legacy P2PKH ones. PQ inputs spend ~977 vbytes vs ~148 for legacy — without this distinction, transactions built from PQ addresses fall under the node's `min relay fee` and are rejected with `code -26: min relay fee not met`.
 
 You should not need to call these helpers directly; they are wired into every builder. They are documented here so you can audit the fee math or use the same constants if you compose transactions outside the standard builder flow.

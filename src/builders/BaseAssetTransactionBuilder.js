@@ -69,6 +69,11 @@ class BaseAssetTransactionBuilder {
     this.ownerTokenManager = new OwnerTokenManager(rpc);
     this.utxoSelector = new UTXOSelector(rpc);
     this.outputOrderer = new OutputOrderer();
+
+    // `estimatesmartfee` is called twice per build (pre-selection guess and
+    // post-selection recompute). The fee rate is stable for the duration of
+    // a single build, so cache the first lookup and reuse it.
+    this._feeRatePromise = null;
   }
 
   /**
@@ -115,7 +120,10 @@ class BaseAssetTransactionBuilder {
    * @returns {Promise<number>} Estimated fee in XNA
    */
   async estimateFee(inputs, outputs) {
-    const feeRate = await this.utxoSelector.getFeeRate();
+    if (!this._feeRatePromise) {
+      this._feeRatePromise = this.utxoSelector.getFeeRate();
+    }
+    const feeRate = await this._feeRatePromise;
     return this.utxoSelector.estimateFee(inputs, outputs, feeRate);
   }
 
