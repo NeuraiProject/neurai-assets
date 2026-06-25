@@ -183,6 +183,28 @@ const result = await assets.createDepinAsset({
 > **Note**: DEPIN assets always use `units = 0`. Recipient and change destinations
 > can be either legacy or AuthScript, as long as they belong to the same chain family.
 
+### Transfer Asset
+
+```javascript
+// Works for any asset type (regular, sub, restricted, DePIN).
+const result = await assets.transferAsset({
+  assetName: 'MYTOKEN',
+  recipients: [
+    { address: 'nM...', amount: 5 },   // amount in display units
+    { address: 'nQ...', amount: 2.5 }
+  ]
+  // changeAddress is optional; defaults to the configured change address.
+  // Asset change and the network fee are handled automatically.
+});
+```
+
+> **DePIN (`&`) note**: DePIN assets are soulbound — the transfer is only valid
+> if it is authorized by the owner. `transferAsset` handles this automatically:
+> it spends the asset's owner token (`&NAME!`) and returns it to the change
+> address, so authority stays with the sender. You must hold the owner token, or
+> the call throws `OwnerTokenNotFoundError`. Transferring ownership itself (handing
+> the owner token to the recipient) is not done here.
+
 ### Create UNIQUE Assets (NFTs)
 
 ```javascript

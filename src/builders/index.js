@@ -11,6 +11,7 @@ const IssueRootBuilder = require('./IssueRootBuilder');
 const IssueSubBuilder = require('./IssueSubBuilder');
 const IssueDepinBuilder = require('./IssueDepinBuilder');
 const ReissueBuilder = require('./ReissueBuilder');
+const TransferBuilder = require('./TransferBuilder');
 
 // Advanced Builders
 const IssueUniqueBuilder = require('./IssueUniqueBuilder');
@@ -29,6 +30,7 @@ module.exports = {
   IssueSubBuilder,
   IssueDepinBuilder,
   ReissueBuilder,
+  TransferBuilder,
 
   // Advanced Builders
   IssueUniqueBuilder,

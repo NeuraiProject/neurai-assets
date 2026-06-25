@@ -32,7 +32,8 @@ const {
   ReissueBuilder,
   ReissueRestrictedBuilder,
   TagAddressBuilder,
-  FreezeAddressBuilder
+  FreezeAddressBuilder,
+  TransferBuilder
 } = require('./builders');
 
 class NeuraiAssets {
@@ -146,6 +147,32 @@ class NeuraiAssets {
    */
   async reissueAsset(params) {
     const builder = new ReissueBuilder(this.rpc, this._buildParams(params));
+    return await builder.build();
+  }
+
+  // ========================================
+  // TRANSFER OPERATIONS
+  // ========================================
+
+  /**
+   * Transfer an existing asset to one or more recipients.
+   *
+   * Works for any asset type. DePIN (`&`) assets are soulbound: this method
+   * automatically spends and returns the asset's owner token (`&NAME!`) so the
+   * transfer satisfies Neurai consensus (bad-txns-depin-transfer-not-by-owner).
+   * The owner token is returned to the change address (authority stays with the
+   * sender). For non-DePIN assets no owner token is involved.
+   *
+   * @param {object} params - Transfer parameters
+   * @param {string} params.assetName - Asset to transfer (e.g. 'TOKEN', '$SEC', '&DEVICE')
+   * @param {Array<object>} params.recipients - Recipients
+   * @param {string} params.recipients[].address - Destination address
+   * @param {number} params.recipients[].amount - Amount in asset display units (> 0)
+   * @param {string} [params.changeAddress] - Override change/owner-return address
+   * @returns {Promise<object>} Transaction data
+   */
+  async transferAsset(params) {
+    const builder = new TransferBuilder(this.rpc, this._buildParams(params));
     return await builder.build();
   }
 

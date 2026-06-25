@@ -106,6 +106,7 @@ declare class NeuraiAssets {
   createSubAsset(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
   createDepinAsset(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
   reissueAsset(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
+  transferAsset(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
   createUniqueAssets(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
   createQualifier(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
   tagAddresses(params: Record<string, unknown>): Promise<NeuraiAssetsBuildResult>;
