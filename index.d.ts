@@ -1,8 +1,17 @@
+/**
+ * NIP-040 asset payload marker. The chain decides which one new asset
+ * outputs must carry; the node reports it as
+ * `getblockchaininfo.asset_marker`. Omit to let the builders ask the node
+ * (falls back to 'rvn' on nodes that do not report the field).
+ */
+export type AssetMarker = 'rvn' | 'xna';
+
 export interface NeuraiAssetsConfig {
   network?: string;
   addresses?: string[];
   changeAddress?: string | null;
   toAddress?: string | null;
+  assetMarker?: AssetMarker;
 }
 
 export type OperationType =
@@ -34,7 +43,8 @@ export interface BuildInput {
 
 export interface LocalRawBuild {
   operationType: OperationType;
-  params: Record<string, unknown>;
+  /** Includes `assetMarker` (NIP-040) for createFromOperation >= 0.7.0. */
+  params: Record<string, unknown> & { assetMarker?: AssetMarker };
 }
 
 export interface NeuraiAssetsBuildResult {

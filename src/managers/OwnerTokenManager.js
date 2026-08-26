@@ -11,6 +11,7 @@
  * it will be PERMANENTLY LOST and the asset can never be reissued or managed.
  */
 
+const { rpcErrorMessage } = require('../utils/rpcErrorMessage');
 const { AssetNameParser } = require('../utils');
 const {
   OwnerTokenNotFoundError,
@@ -69,7 +70,7 @@ class OwnerTokenManager {
       }
 
       throw new AssetError(
-        `Failed to find owner token ${ownerTokenName}: ${error.message}`
+        `Failed to find owner token ${ownerTokenName}: ${rpcErrorMessage(error)}`
       );
     }
   }
@@ -207,7 +208,7 @@ class OwnerTokenManager {
       return ownerTokenUTXOs;
     } catch (error) {
       throw new AssetError(
-        `Failed to get owner tokens: ${error.message}`
+        `Failed to get owner tokens: ${rpcErrorMessage(error)}`
       );
     }
   }

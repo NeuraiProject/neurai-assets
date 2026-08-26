@@ -235,7 +235,7 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
         ownerTokenName: assetName + '!',
         parentOwnerTokenUsed: ownerTokenName,
         operationType: 'ISSUE_SUB',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_SUB',
           inputs,
           burnInfo,

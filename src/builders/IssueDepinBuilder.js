@@ -137,7 +137,7 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
         assetName,
         ownerTokenName: `${assetName}!`,
         operationType: 'ISSUE_DEPIN',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_DEPIN',
           inputs,
           burnInfo,

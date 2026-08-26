@@ -230,7 +230,7 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
         parentQualifier: isSub ? parsed.parent : null,
         parentQualifierUsed: parentQualifierName,
         operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
           inputs,
           burnInfo,

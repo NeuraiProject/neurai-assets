@@ -2,6 +2,12 @@
 
 Complete asset management library for Neurai blockchain. Supports creation, reissuance, and queries for all asset types in a non-custodial way.
 
+> **1.4.0**: NIP-040 `assetMarker` in `localRawBuild` (see below); RPC
+> rejection messages from `@neuraiproject/neurai-rpc` >= 0.5 are surfaced
+> correctly (they carry no `.message`); name-length caps now mirror the node
+> (full name, owner `!` included: 31 mainnet / 121 testnet-regtest, validated
+> against a regtest node); peer `neurai-rpc ^0.6.0`.
+
 ## Features
 
 - ✅ **Non-custodial**: Library builds unsigned transactions, your wallet signs them
@@ -524,6 +530,26 @@ The library automatically validates that the owner token is returned in each ope
 | Freeze/Unfreeze global | 0 (network fee only) |
 
 **Note**: In addition to the burned cost, all operations pay a network fee (calculated automatically).
+
+## NIP-040 asset marker (local raw builds)
+
+Asset payloads open with a 3-byte marker that NIP-040 migrates from the
+Ravencoin-inherited `rvn` to `xna` at an activation height per network
+(testnet: 303000, already crossed; regtest: 1; mainnet: not scheduled yet).
+
+- Transactions built **through the node** (`createrawtransaction`) need
+  nothing: the node stamps the marker itself.
+- The `localRawBuild` metadata (consumed by
+  `@neuraiproject/neurai-create-transaction createFromOperation`, >= 0.7.0)
+  now carries `params.assetMarker`. Builders resolve it once per build:
+  1. `params.assetMarker` / `config.assetMarker` if you set it (`'rvn'` |
+     `'xna'` — offline builds or tests);
+  2. otherwise the node's `getblockchaininfo.asset_marker` (node commit
+     `347362b` or later);
+  3. `'rvn'` when the node predates that field or the call fails — which
+     matches what such a node enforces.
+
+No height tables and no network inference: the node (or you) decides.
 
 ## Validations
 

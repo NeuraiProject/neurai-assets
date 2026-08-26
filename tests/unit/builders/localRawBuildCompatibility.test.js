@@ -65,9 +65,14 @@ function countScriptsContaining(outputs, fragment) {
   return outputs.filter(output => output.scriptHex.includes(fragment)).length;
 }
 
-function createRpc({ assetMap = {}, xnaUtxos = [], ownerUtxos = [] }) {
+function createRpc({ assetMap = {}, xnaUtxos = [], ownerUtxos = [], assetMarker }) {
   return async (method, params = []) => {
     switch (method) {
+      case 'getblockchaininfo':
+        // With no marker configured, behave like a node that predates the
+        // asset_marker field (pre-347362b): the build must default to rvn.
+        return assetMarker === undefined ? { chain: 'test' } : { chain: 'test', asset_marker: assetMarker };
+
       case 'getassetdata': {
         const assetName = params[0];
         if (Object.prototype.hasOwnProperty.call(assetMap, assetName)) {
@@ -235,5 +240,65 @@ describe('Local Raw Build Compatibility', () => {
     expect(countScriptsContaining(outputs, asciiHex('ROOT!'))).to.equal(1);
     expect(countScriptsContaining(outputs, asciiHex('KYC'))).to.equal(1);
     expect(countScriptsContaining(outputs, '72766e72')).to.equal(1);
+  });
+});
+
+
+describe('Local Raw Build NIP-040 marker', () => {
+  function reissueFixture(extraRpc = {}, builderExtra = {}) {
+    const rpc = createRpc({
+      assetMap: { ROOT: { amount: 10, reissuable: 1, units: 0 } },
+      xnaUtxos: [
+        { txid: '07'.repeat(32), outputIndex: 0, address: LEGACY_TEST_ADDRESS, satoshis: 5000000000000 }
+      ],
+      ownerUtxos: [
+        { txid: '08'.repeat(32), outputIndex: 1, address: LEGACY_TEST_ADDRESS, assetName: 'ROOT!', satoshis: 100000000 }
+      ],
+      ...extraRpc
+    });
+    return new ReissueBuilder(rpc, {
+      network: 'xna-test',
+      walletAddresses: [LEGACY_TEST_ADDRESS],
+      changeAddress: LEGACY_TEST_ADDRESS,
+      toAddress: LEGACY_TEST_ADDRESS,
+      assetName: 'ROOT',
+      quantity: 4,
+      ...builderExtra
+    });
+  }
+
+  it('stamps the marker reported by the node (xna) into every asset output', async () => {
+    const result = await reissueFixture({ assetMarker: 'xna' }).build();
+    expect(result.localRawBuild.params.assetMarker).to.equal('xna');
+    const outputs = parseUnsignedOutputs(createFromOperation(result.localRawBuild).rawTx);
+    expect(countScriptsContaining(outputs, '786e6172')).to.equal(1); // reissue
+    expect(countScriptsContaining(outputs, '786e6174')).to.equal(1); // owner escort
+    expect(countScriptsContaining(outputs, '72766e')).to.equal(0);
+  });
+
+  it('defaults to rvn when the node predates asset_marker', async () => {
+    const result = await reissueFixture().build();
+    expect(result.localRawBuild.params.assetMarker).to.equal('rvn');
+    const outputs = parseUnsignedOutputs(createFromOperation(result.localRawBuild).rawTx);
+    expect(countScriptsContaining(outputs, '72766e72')).to.equal(1);
+    expect(countScriptsContaining(outputs, '786e61')).to.equal(0);
+  });
+
+  it('lets the caller override the node (params.assetMarker wins)', async () => {
+    const result = await reissueFixture({ assetMarker: 'xna' }, { assetMarker: 'rvn' }).build();
+    expect(result.localRawBuild.params.assetMarker).to.equal('rvn');
+    const outputs = parseUnsignedOutputs(createFromOperation(result.localRawBuild).rawTx);
+    expect(countScriptsContaining(outputs, '72766e72')).to.equal(1);
+  });
+
+  it('rejects an invalid override before touching the node', async () => {
+    let failed = null;
+    try {
+      await reissueFixture({ assetMarker: 'xna' }, { assetMarker: 'XNA' }).build();
+    } catch (error) {
+      failed = error;
+    }
+    expect(failed, 'build must reject').to.not.equal(null);
+    expect(failed.message).to.contain('Invalid assetMarker');
   });
 });

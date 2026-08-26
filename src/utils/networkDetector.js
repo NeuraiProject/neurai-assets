@@ -2,6 +2,7 @@
  * Network Detector
  * Detects network type from various sources
  */
+const { rpcErrorMessage } = require('./rpcErrorMessage');
 
 const {
   NETWORKS,
@@ -37,7 +38,7 @@ class NetworkDetector {
       // Default to mainnet
       return 'xna';
     } catch (error) {
-      throw new Error(`Failed to detect network from RPC: ${error.message}`);
+      throw new Error(`Failed to detect network from RPC: ${rpcErrorMessage(error)}`);
     }
   }
 

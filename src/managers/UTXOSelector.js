@@ -8,6 +8,7 @@
  * - Mempool filtering to prevent double-spending
  */
 
+const { rpcErrorMessage } = require('../utils/rpcErrorMessage');
 const { InsufficientFundsError } = require('../errors');
 const { estimateTransactionVbytes } = require('../utils/feeSizing');
 
@@ -46,7 +47,7 @@ class UTXOSelector {
         return utxos.filter(utxo => !utxo.assetName || utxo.assetName === 'XNA');
       }
     } catch (error) {
-      throw new Error(`Failed to get UTXOs: ${error.message}`);
+      throw new Error(`Failed to get UTXOs: ${rpcErrorMessage(error)}`);
     }
   }
 

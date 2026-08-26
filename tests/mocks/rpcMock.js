@@ -47,6 +47,8 @@ class RPCMock {
    */
   getDefaultResponse(method, params) {
     const defaults = {
+      // NIP-040: marker the node requires for the next block (commit 347362b).
+      'getblockchaininfo': { chain: 'test', asset_marker: 'rvn' },
       'listunspent': [],
       'getassetdata': { name: params[0], amount: 1000000 },
       'listassets': [],

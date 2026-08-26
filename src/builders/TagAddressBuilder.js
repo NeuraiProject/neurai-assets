@@ -208,7 +208,7 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
         targetAddresses,
         addressCount,
         operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
           inputs,
           burnInfo,

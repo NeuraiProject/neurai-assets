@@ -166,7 +166,7 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
         assetName,
         ownerTokenName: assetName + '!',
         operationType: 'ISSUE_ROOT',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_ROOT',
           inputs,
           burnInfo,

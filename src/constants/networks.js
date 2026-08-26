@@ -12,7 +12,7 @@ const NETWORKS = {
     addressPrefix: 'N',
     authScriptAddressPrefix: 'nq1',
     pqAddressPrefix: 'nq1',
-    assetNameMaxLength: 32,
+    assetNameMaxLength: 31,
     defaultRPCPort: 19001,
     coin: 'XNA',
     baseNetwork: 'xna'
@@ -23,7 +23,7 @@ const NETWORKS = {
     addressPrefix: 't',
     authScriptAddressPrefix: 'tnq1',
     pqAddressPrefix: 'tnq1',
-    assetNameMaxLength: 32,  // Same as mainnet
+    assetNameMaxLength: 121, // DePIN networks (testnet/regtest) extend the cap
     defaultRPCPort: 19101,
     coin: 'TXNA',
     baseNetwork: 'xna-test'
@@ -34,7 +34,7 @@ const NETWORKS = {
     addressPrefix: 'N',
     authScriptAddressPrefix: 'nq1',
     pqAddressPrefix: 'nq1',
-    assetNameMaxLength: 32,
+    assetNameMaxLength: 31,
     defaultRPCPort: 19001,
     coin: 'XNA',
     baseNetwork: 'xna'
@@ -45,7 +45,7 @@ const NETWORKS = {
     addressPrefix: 't',
     authScriptAddressPrefix: 'tnq1',
     pqAddressPrefix: 'tnq1',
-    assetNameMaxLength: 32,
+    assetNameMaxLength: 121,
     defaultRPCPort: 19101,
     coin: 'TXNA',
     baseNetwork: 'xna-test'

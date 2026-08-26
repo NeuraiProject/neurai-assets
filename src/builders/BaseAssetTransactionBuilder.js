@@ -14,6 +14,7 @@
  * - build()
  */
 
+const { rpcErrorMessage } = require('../utils/rpcErrorMessage');
 const { BurnManager, OwnerTokenManager, UTXOSelector, OutputOrderer } = require('../managers');
 const { AssetNameValidator, AmountValidator } = require('../validators');
 
@@ -74,6 +75,9 @@ class BaseAssetTransactionBuilder {
     // post-selection recompute). The fee rate is stable for the duration of
     // a single build, so cache the first lookup and reuse it.
     this._feeRatePromise = null;
+
+    // NIP-040 marker for the localRawBuild metadata; resolved once per build.
+    this._assetMarkerPromise = null;
   }
 
   /**
@@ -166,7 +170,7 @@ class BaseAssetTransactionBuilder {
 
       return rawTx;
     } catch (error) {
-      throw new Error(`Failed to create raw transaction: ${error.message}`);
+      throw new Error(`Failed to create raw transaction: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -331,8 +335,62 @@ class BaseAssetTransactionBuilder {
   }
 
   /**
+   * NIP-040 marker for every asset output of the localRawBuild metadata.
+   *
+   * The chain decides which marker ("rvn" or "xna") new asset outputs must
+   * carry, per network and height, and the node reports the one required for
+   * the next block as `getblockchaininfo.asset_marker` (node commit 347362b).
+   * Resolution order:
+   *   1. `params.assetMarker` (explicit caller override — offline builds,
+   *      tests, or a node this library should not ask);
+   *   2. `getblockchaininfo.asset_marker` from the connected node;
+   *   3. `'rvn'` when the node predates the field or the call fails
+   *      (matches what such a node enforces; documented in the README).
+   * The RPC-built transaction path never needs this: the node stamps the
+   * marker itself in `createrawtransaction`.
+   *
+   * @returns {Promise<'rvn'|'xna'>} Marker for locally built asset outputs
+   */
+  resolveAssetMarker() {
+    if (!this._assetMarkerPromise) {
+      this._assetMarkerPromise = this._fetchAssetMarker();
+    }
+    return this._assetMarkerPromise;
+  }
+
+  async _fetchAssetMarker() {
+    const override = this.params.assetMarker;
+    if (override !== undefined && override !== null) {
+      if (override !== 'rvn' && override !== 'xna') {
+        throw new Error(
+          `Invalid assetMarker: ${override} (expected 'rvn' or 'xna', the value of getblockchaininfo.asset_marker)`
+        );
+      }
+      return override;
+    }
+
+    let info = null;
+    try {
+      info = await this.rpc('getblockchaininfo', []);
+    } catch (error) {
+      return 'rvn';
+    }
+    const marker = info ? info.asset_marker : undefined;
+    if (marker === undefined || marker === null) {
+      return 'rvn';
+    }
+    if (marker !== 'rvn' && marker !== 'xna') {
+      throw new Error(`Node reported an unknown asset_marker: ${marker}`);
+    }
+    return marker;
+  }
+
+  /**
    * Build a typed local raw build payload compatible with
    * @neuraiproject/neurai-create-transaction createFromOperation(...)
+   *
+   * Stamps the NIP-040 `assetMarker` (see resolveAssetMarker) so
+   * createFromOperation >= 0.7.0 emits the marker the chain requires.
    *
    * @param {string} operationType - Operation type
    * @param {Array} inputs - Builder inputs
@@ -340,9 +398,9 @@ class BaseAssetTransactionBuilder {
    * @param {string|null} changeAddress - XNA change address
    * @param {number|null} changeAmount - XNA change amount in XNA
    * @param {object} operationParams - Operation-specific params
-   * @returns {{ operationType: string, params: object }} Local raw build
+   * @returns {Promise<{ operationType: string, params: object }>} Local raw build
    */
-  buildLocalRawBuild(
+  async buildLocalRawBuild(
     operationType,
     inputs,
     burnInfo = null,
@@ -352,6 +410,7 @@ class BaseAssetTransactionBuilder {
   ) {
     const params = {
       inputs: this.toRawTxInputs(inputs),
+      assetMarker: await this.resolveAssetMarker(),
       ...operationParams
     };
 
@@ -488,7 +547,7 @@ class BaseAssetTransactionBuilder {
       return assetData !== null && assetData !== undefined;
     } catch (error) {
       // If asset doesn't exist, RPC will throw error
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         return false;
       }
       // Re-throw other errors
@@ -505,7 +564,7 @@ class BaseAssetTransactionBuilder {
     try {
       return await this.rpc('getassetdata', [assetName]);
     } catch (error) {
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         return null;
       }
       throw error;

@@ -7,7 +7,10 @@ const { ASSET_NAME_RULES } = require('../constants');
 const { InvalidAssetNameError } = require('../errors');
 
 const MIN_ASSET_LENGTH = 3;
-const MAINNET_MAX_NAME_LENGTH = 32;
+// Full-name caps, mirror of the node (assets_fromscript.cpp:31-47): the limit
+// applies to the COMPLETE name, owner '!' and tags included, so a mainnet
+// root is effectively capped at 30 (its owner token "ROOT!" must fit in 31).
+const MAINNET_MAX_NAME_LENGTH = 31;
 const TESTNET_MAX_NAME_LENGTH = 121;
 
 const ROOT_NAME_CHARACTERS = /^[A-Z0-9._]{3,}$/;

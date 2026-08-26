@@ -236,7 +236,7 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
         previousSupply: currentSupply,
         reissuableLocked: reissuable === false,
         operationType: 'REISSUE',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'REISSUE',
           inputs,
           burnInfo,

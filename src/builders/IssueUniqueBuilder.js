@@ -246,7 +246,7 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
         nftCount,
         ownerTokenUsed: ownerTokenName,
         operationType: 'ISSUE_UNIQUE',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_UNIQUE',
           inputs,
           burnInfo,

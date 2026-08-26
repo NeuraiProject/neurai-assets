@@ -12,6 +12,7 @@
  * - Verifier validation (isvalidverifierstring)
  */
 
+const { rpcErrorMessage } = require('../utils/rpcErrorMessage');
 const { AssetNotFoundError, InvalidAddressError } = require('../errors');
 
 class AssetQueries {
@@ -53,14 +54,14 @@ class AssetQueries {
       }
 
       // RPC error - likely asset doesn't exist
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         throw new AssetNotFoundError(
           `Asset ${assetName} not found on blockchain`,
           assetName
         );
       }
 
-      throw new Error(`Failed to get asset data: ${error.message}`);
+      throw new Error(`Failed to get asset data: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -77,7 +78,7 @@ class AssetQueries {
       const assets = await this.rpc('listassets', [filter, verbose, count, start]);
       return assets || [];
     } catch (error) {
-      throw new Error(`Failed to list assets: ${error.message}`);
+      throw new Error(`Failed to list assets: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -95,7 +96,7 @@ class AssetQueries {
       const myAssets = await this.rpc('listmyassets', [assetName, verbose, count, start, confs]);
       return myAssets || {};
     } catch (error) {
-      throw new Error(`Failed to list my assets: ${error.message}`);
+      throw new Error(`Failed to list my assets: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -116,13 +117,13 @@ class AssetQueries {
       const result = await this.rpc('listaddressesbyasset', [assetName, onlyCount, count, start]);
       return result || (onlyCount ? 0 : []);
     } catch (error) {
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         throw new AssetNotFoundError(
           `Asset ${assetName} not found on blockchain`,
           assetName
         );
       }
-      throw new Error(`Failed to list addresses by asset: ${error.message}`);
+      throw new Error(`Failed to list addresses by asset: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -143,7 +144,7 @@ class AssetQueries {
       const result = await this.rpc('listassetbalancesbyaddress', [address, onlyTotal, count, start]);
       return result || (onlyTotal ? 0 : []);
     } catch (error) {
-      throw new Error(`Failed to list asset balances by address: ${error.message}`);
+      throw new Error(`Failed to list asset balances by address: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -167,10 +168,10 @@ class AssetQueries {
       return result === true || result === 1;
     } catch (error) {
       // If tag doesn't exist or address doesn't have it, return false
-      if (error.message && (error.message.includes('not found') || error.message.includes('does not have'))) {
+      if (rpcErrorMessage(error).includes('not found') || rpcErrorMessage(error).includes('does not have')) {
         return false;
       }
-      throw new Error(`Failed to check address tag: ${error.message}`);
+      throw new Error(`Failed to check address tag: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -189,10 +190,10 @@ class AssetQueries {
       return tags || [];
     } catch (error) {
       // If no tags found, return empty array
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         return [];
       }
-      throw new Error(`Failed to list tags for address: ${error.message}`);
+      throw new Error(`Failed to list tags for address: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -210,13 +211,13 @@ class AssetQueries {
       const addresses = await this.rpc('listaddressesfortag', [qualifierName]);
       return addresses || [];
     } catch (error) {
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         throw new AssetNotFoundError(
           `Qualifier ${qualifierName} not found on blockchain`,
           qualifierName
         );
       }
-      throw new Error(`Failed to list addresses for tag: ${error.message}`);
+      throw new Error(`Failed to list addresses for tag: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -240,10 +241,10 @@ class AssetQueries {
       return result === true || result === 1;
     } catch (error) {
       // If address doesn't meet requirements, return false
-      if (error.message && (error.message.includes('not found') || error.message.includes('does not meet'))) {
+      if (rpcErrorMessage(error).includes('not found') || rpcErrorMessage(error).includes('does not meet')) {
         return false;
       }
-      throw new Error(`Failed to check address restriction: ${error.message}`);
+      throw new Error(`Failed to check address restriction: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -270,7 +271,7 @@ class AssetQueries {
       }
       return false;
     } catch (error) {
-      throw new Error(`Failed to check if address is frozen: ${error.message}`);
+      throw new Error(`Failed to check if address is frozen: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -288,13 +289,13 @@ class AssetQueries {
       const result = await this.rpc('checkglobalrestriction', [restrictedAssetName]);
       return result === true || result === 1;
     } catch (error) {
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         throw new AssetNotFoundError(
           `Restricted asset ${restrictedAssetName} not found on blockchain`,
           restrictedAssetName
         );
       }
-      throw new Error(`Failed to check global restriction: ${error.message}`);
+      throw new Error(`Failed to check global restriction: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -312,13 +313,13 @@ class AssetQueries {
       const result = await this.rpc('getverifierstring', [restrictedAssetName]);
       return result || '';
     } catch (error) {
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         throw new AssetNotFoundError(
           `Restricted asset ${restrictedAssetName} not found on blockchain`,
           restrictedAssetName
         );
       }
-      throw new Error(`Failed to get verifier string: ${error.message}`);
+      throw new Error(`Failed to get verifier string: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -360,7 +361,7 @@ class AssetQueries {
       const result = await this.rpc('getsnapshotrequest', [assetName, blockHeight]);
       return result;
     } catch (error) {
-      throw new Error(`Failed to get snapshot request: ${error.message}`);
+      throw new Error(`Failed to get snapshot request: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -383,7 +384,7 @@ class AssetQueries {
       const result = await this.rpc('cancelsnapshotrequest', [assetName, blockHeight]);
       return result === true || result === 1;
     } catch (error) {
-      throw new Error(`Failed to cancel snapshot request: ${error.message}`);
+      throw new Error(`Failed to cancel snapshot request: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -401,13 +402,13 @@ class AssetQueries {
       const result = await this.rpc('listdepinholders', [assetName]);
       return result || [];
     } catch (error) {
-      if (error.message && error.message.includes('not found')) {
+      if (rpcErrorMessage(error).includes('not found')) {
         throw new AssetNotFoundError(
           `DEPIN asset ${assetName} not found on blockchain`,
           assetName
         );
       }
-      throw new Error(`Failed to list DEPIN holders: ${error.message}`);
+      throw new Error(`Failed to list DEPIN holders: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -430,7 +431,7 @@ class AssetQueries {
       const result = await this.rpc('checkdepinvalidity', [assetName, address]);
       return result || { has_asset: false };
     } catch (error) {
-      throw new Error(`Failed to check DEPIN validity: ${error.message}`);
+      throw new Error(`Failed to check DEPIN validity: ${rpcErrorMessage(error)}`);
     }
   }
 
@@ -444,7 +445,7 @@ class AssetQueries {
       const assets = await this.listAssets('*', false, 1, 0);
       return Array.isArray(assets) ? assets.length : 0;
     } catch (error) {
-      throw new Error(`Failed to get asset count: ${error.message}`);
+      throw new Error(`Failed to get asset count: ${rpcErrorMessage(error)}`);
     }
   }
 

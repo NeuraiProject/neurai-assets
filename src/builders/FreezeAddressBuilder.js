@@ -216,7 +216,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
         targetAddresses: targetAddresses.length > 0 ? targetAddresses : null,
         addressCount: targetAddresses.length,
         operationType,
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           operationType,
           inputs,
           null,

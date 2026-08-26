@@ -252,7 +252,7 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
         requiredQualifiers,
         reissuableLocked: reissuable === false,
         operationType: 'REISSUE_RESTRICTED',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'REISSUE_RESTRICTED',
           inputs,
           burnInfo,

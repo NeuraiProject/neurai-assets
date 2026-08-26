@@ -230,7 +230,7 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
         isDepin,
         ownerTokenUsed: isDepin ? ownerTokenName : null,
         operationType: 'TRANSFER',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'TRANSFER',
           inputs,
           null, // no burn

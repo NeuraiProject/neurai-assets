@@ -44,6 +44,10 @@ class NeuraiAssets {
    * @param {Array<string>} config.addresses - Wallet addresses
    * @param {string} config.changeAddress - Default change address
    * @param {string} config.toAddress - Default receiving address
+   * @param {('rvn'|'xna')} [config.assetMarker] - NIP-040 marker for locally
+   *   built raw transactions. Omit to use the node's
+   *   getblockchaininfo.asset_marker (falls back to 'rvn' on nodes that do
+   *   not report it). Per-operation params.assetMarker overrides this.
    */
   constructor(rpc, config = {}) {
     if (!rpc || typeof rpc !== 'function') {
@@ -81,7 +85,10 @@ class NeuraiAssets {
       network: this.config.network,
       walletAddresses: this.config.addresses,
       changeAddress: params.changeAddress || this.config.changeAddress,
-      toAddress: params.toAddress || this.config.toAddress
+      toAddress: params.toAddress || this.config.toAddress,
+      // NIP-040: marker for the localRawBuild metadata. Undefined lets the
+      // builder ask the node (getblockchaininfo.asset_marker).
+      assetMarker: params.assetMarker !== undefined ? params.assetMarker : this.config.assetMarker
     };
   }
 

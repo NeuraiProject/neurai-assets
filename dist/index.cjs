@@ -9,6 +9,55 @@ function getDefaultExportFromCjs (x) {
 var src = {exports: {}};
 
 /**
+ * Extract a human-readable message from an RPC rejection.
+ *
+ * @neuraiproject/neurai-rpc >= 0.5 never rejects with a plain Error, so
+ * `error.message` is undefined for every node failure. It uses three shapes:
+ *
+ *   1. {error: {code, message}, description}      JSON-RPC error (also on HTTP 200)
+ *   2. {statusText, status, description, error}   HTTP response other than 200
+ *   3. {originalError, type: 'ServerUnreachable', error, description}
+ *
+ * In shape 3 `error` is a string, in shapes 1 and 2 it is an object (or
+ * null). Plain Errors (thrown by this library or by mocks) keep working
+ * through the `error.message` candidate.
+ */
+
+var rpcErrorMessage_1;
+var hasRequiredRpcErrorMessage;
+
+function requireRpcErrorMessage () {
+	if (hasRequiredRpcErrorMessage) return rpcErrorMessage_1;
+	hasRequiredRpcErrorMessage = 1;
+	function rpcErrorMessage(error) {
+	  if (!error) {
+	    return '';
+	  }
+	  if (typeof error === 'string') {
+	    return error;
+	  }
+
+	  const candidates = [
+	    error.error && error.error.message,
+	    typeof error.error === 'string' ? error.error : null,
+	    error.description,
+	    error.message,
+	    error.statusText
+	  ];
+
+	  for (const candidate of candidates) {
+	    if (typeof candidate === 'string' && candidate.length > 0) {
+	      return candidate;
+	    }
+	  }
+	  return '';
+	}
+
+	rpcErrorMessage_1 = { rpcErrorMessage };
+	return rpcErrorMessage_1;
+}
+
+/**
  * Validation Error Classes
  * Errors thrown during parameter validation
  */
@@ -333,6 +382,7 @@ var hasRequiredAssetQueries;
 function requireAssetQueries () {
 	if (hasRequiredAssetQueries) return AssetQueries_1;
 	hasRequiredAssetQueries = 1;
+	const { rpcErrorMessage } = requireRpcErrorMessage();
 	const { AssetNotFoundError, InvalidAddressError } = requireErrors();
 
 	class AssetQueries {
@@ -374,14 +424,14 @@ function requireAssetQueries () {
 	      }
 
 	      // RPC error - likely asset doesn't exist
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        throw new AssetNotFoundError(
 	          `Asset ${assetName} not found on blockchain`,
 	          assetName
 	        );
 	      }
 
-	      throw new Error(`Failed to get asset data: ${error.message}`);
+	      throw new Error(`Failed to get asset data: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -398,7 +448,7 @@ function requireAssetQueries () {
 	      const assets = await this.rpc('listassets', [filter, verbose, count, start]);
 	      return assets || [];
 	    } catch (error) {
-	      throw new Error(`Failed to list assets: ${error.message}`);
+	      throw new Error(`Failed to list assets: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -416,7 +466,7 @@ function requireAssetQueries () {
 	      const myAssets = await this.rpc('listmyassets', [assetName, verbose, count, start, confs]);
 	      return myAssets || {};
 	    } catch (error) {
-	      throw new Error(`Failed to list my assets: ${error.message}`);
+	      throw new Error(`Failed to list my assets: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -437,13 +487,13 @@ function requireAssetQueries () {
 	      const result = await this.rpc('listaddressesbyasset', [assetName, onlyCount, count, start]);
 	      return result || (onlyCount ? 0 : []);
 	    } catch (error) {
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        throw new AssetNotFoundError(
 	          `Asset ${assetName} not found on blockchain`,
 	          assetName
 	        );
 	      }
-	      throw new Error(`Failed to list addresses by asset: ${error.message}`);
+	      throw new Error(`Failed to list addresses by asset: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -464,7 +514,7 @@ function requireAssetQueries () {
 	      const result = await this.rpc('listassetbalancesbyaddress', [address, onlyTotal, count, start]);
 	      return result || (onlyTotal ? 0 : []);
 	    } catch (error) {
-	      throw new Error(`Failed to list asset balances by address: ${error.message}`);
+	      throw new Error(`Failed to list asset balances by address: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -488,10 +538,10 @@ function requireAssetQueries () {
 	      return result === true || result === 1;
 	    } catch (error) {
 	      // If tag doesn't exist or address doesn't have it, return false
-	      if (error.message && (error.message.includes('not found') || error.message.includes('does not have'))) {
+	      if (rpcErrorMessage(error).includes('not found') || rpcErrorMessage(error).includes('does not have')) {
 	        return false;
 	      }
-	      throw new Error(`Failed to check address tag: ${error.message}`);
+	      throw new Error(`Failed to check address tag: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -510,10 +560,10 @@ function requireAssetQueries () {
 	      return tags || [];
 	    } catch (error) {
 	      // If no tags found, return empty array
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        return [];
 	      }
-	      throw new Error(`Failed to list tags for address: ${error.message}`);
+	      throw new Error(`Failed to list tags for address: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -531,13 +581,13 @@ function requireAssetQueries () {
 	      const addresses = await this.rpc('listaddressesfortag', [qualifierName]);
 	      return addresses || [];
 	    } catch (error) {
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        throw new AssetNotFoundError(
 	          `Qualifier ${qualifierName} not found on blockchain`,
 	          qualifierName
 	        );
 	      }
-	      throw new Error(`Failed to list addresses for tag: ${error.message}`);
+	      throw new Error(`Failed to list addresses for tag: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -561,10 +611,10 @@ function requireAssetQueries () {
 	      return result === true || result === 1;
 	    } catch (error) {
 	      // If address doesn't meet requirements, return false
-	      if (error.message && (error.message.includes('not found') || error.message.includes('does not meet'))) {
+	      if (rpcErrorMessage(error).includes('not found') || rpcErrorMessage(error).includes('does not meet')) {
 	        return false;
 	      }
-	      throw new Error(`Failed to check address restriction: ${error.message}`);
+	      throw new Error(`Failed to check address restriction: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -591,7 +641,7 @@ function requireAssetQueries () {
 	      }
 	      return false;
 	    } catch (error) {
-	      throw new Error(`Failed to check if address is frozen: ${error.message}`);
+	      throw new Error(`Failed to check if address is frozen: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -609,13 +659,13 @@ function requireAssetQueries () {
 	      const result = await this.rpc('checkglobalrestriction', [restrictedAssetName]);
 	      return result === true || result === 1;
 	    } catch (error) {
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        throw new AssetNotFoundError(
 	          `Restricted asset ${restrictedAssetName} not found on blockchain`,
 	          restrictedAssetName
 	        );
 	      }
-	      throw new Error(`Failed to check global restriction: ${error.message}`);
+	      throw new Error(`Failed to check global restriction: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -633,13 +683,13 @@ function requireAssetQueries () {
 	      const result = await this.rpc('getverifierstring', [restrictedAssetName]);
 	      return result || '';
 	    } catch (error) {
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        throw new AssetNotFoundError(
 	          `Restricted asset ${restrictedAssetName} not found on blockchain`,
 	          restrictedAssetName
 	        );
 	      }
-	      throw new Error(`Failed to get verifier string: ${error.message}`);
+	      throw new Error(`Failed to get verifier string: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -681,7 +731,7 @@ function requireAssetQueries () {
 	      const result = await this.rpc('getsnapshotrequest', [assetName, blockHeight]);
 	      return result;
 	    } catch (error) {
-	      throw new Error(`Failed to get snapshot request: ${error.message}`);
+	      throw new Error(`Failed to get snapshot request: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -704,7 +754,7 @@ function requireAssetQueries () {
 	      const result = await this.rpc('cancelsnapshotrequest', [assetName, blockHeight]);
 	      return result === true || result === 1;
 	    } catch (error) {
-	      throw new Error(`Failed to cancel snapshot request: ${error.message}`);
+	      throw new Error(`Failed to cancel snapshot request: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -722,13 +772,13 @@ function requireAssetQueries () {
 	      const result = await this.rpc('listdepinholders', [assetName]);
 	      return result || [];
 	    } catch (error) {
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        throw new AssetNotFoundError(
 	          `DEPIN asset ${assetName} not found on blockchain`,
 	          assetName
 	        );
 	      }
-	      throw new Error(`Failed to list DEPIN holders: ${error.message}`);
+	      throw new Error(`Failed to list DEPIN holders: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -751,7 +801,7 @@ function requireAssetQueries () {
 	      const result = await this.rpc('checkdepinvalidity', [assetName, address]);
 	      return result || { has_asset: false };
 	    } catch (error) {
-	      throw new Error(`Failed to check DEPIN validity: ${error.message}`);
+	      throw new Error(`Failed to check DEPIN validity: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -765,7 +815,7 @@ function requireAssetQueries () {
 	      const assets = await this.listAssets('*', false, 1, 0);
 	      return Array.isArray(assets) ? assets.length : 0;
 	    } catch (error) {
-	      throw new Error(`Failed to get asset count: ${error.message}`);
+	      throw new Error(`Failed to get asset count: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -1051,7 +1101,7 @@ function requireNetworks () {
 	    addressPrefix: 'N',
 	    authScriptAddressPrefix: 'nq1',
 	    pqAddressPrefix: 'nq1',
-	    assetNameMaxLength: 32,
+	    assetNameMaxLength: 31,
 	    defaultRPCPort: 19001,
 	    coin: 'XNA',
 	    baseNetwork: 'xna'
@@ -1062,7 +1112,7 @@ function requireNetworks () {
 	    addressPrefix: 't',
 	    authScriptAddressPrefix: 'tnq1',
 	    pqAddressPrefix: 'tnq1',
-	    assetNameMaxLength: 32,  // Same as mainnet
+	    assetNameMaxLength: 121, // DePIN networks (testnet/regtest) extend the cap
 	    defaultRPCPort: 19101,
 	    coin: 'TXNA',
 	    baseNetwork: 'xna-test'
@@ -1073,7 +1123,7 @@ function requireNetworks () {
 	    addressPrefix: 'N',
 	    authScriptAddressPrefix: 'nq1',
 	    pqAddressPrefix: 'nq1',
-	    assetNameMaxLength: 32,
+	    assetNameMaxLength: 31,
 	    defaultRPCPort: 19001,
 	    coin: 'XNA',
 	    baseNetwork: 'xna'
@@ -1084,7 +1134,7 @@ function requireNetworks () {
 	    addressPrefix: 't',
 	    authScriptAddressPrefix: 'tnq1',
 	    pqAddressPrefix: 'tnq1',
-	    assetNameMaxLength: 32,
+	    assetNameMaxLength: 121,
 	    defaultRPCPort: 19101,
 	    coin: 'TXNA',
 	    baseNetwork: 'xna-test'
@@ -1912,6 +1962,8 @@ var hasRequiredNetworkDetector;
 function requireNetworkDetector () {
 	if (hasRequiredNetworkDetector) return networkDetector;
 	hasRequiredNetworkDetector = 1;
+	const { rpcErrorMessage } = requireRpcErrorMessage();
+
 	const {
 	  NETWORKS,
 	  areAddressNetworksCompatible,
@@ -1946,7 +1998,7 @@ function requireNetworkDetector () {
 	      // Default to mainnet
 	      return 'xna';
 	    } catch (error) {
-	      throw new Error(`Failed to detect network from RPC: ${error.message}`);
+	      throw new Error(`Failed to detect network from RPC: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -2466,6 +2518,7 @@ var hasRequiredOwnerTokenManager;
 function requireOwnerTokenManager () {
 	if (hasRequiredOwnerTokenManager) return OwnerTokenManager_1;
 	hasRequiredOwnerTokenManager = 1;
+	const { rpcErrorMessage } = requireRpcErrorMessage();
 	const { AssetNameParser } = requireUtils();
 	const {
 	  OwnerTokenNotFoundError,
@@ -2524,7 +2577,7 @@ function requireOwnerTokenManager () {
 	      }
 
 	      throw new AssetError(
-	        `Failed to find owner token ${ownerTokenName}: ${error.message}`
+	        `Failed to find owner token ${ownerTokenName}: ${rpcErrorMessage(error)}`
 	      );
 	    }
 	  }
@@ -2662,7 +2715,7 @@ function requireOwnerTokenManager () {
 	      return ownerTokenUTXOs;
 	    } catch (error) {
 	      throw new AssetError(
-	        `Failed to get owner tokens: ${error.message}`
+	        `Failed to get owner tokens: ${rpcErrorMessage(error)}`
 	      );
 	    }
 	  }
@@ -2854,6 +2907,7 @@ var hasRequiredUTXOSelector;
 function requireUTXOSelector () {
 	if (hasRequiredUTXOSelector) return UTXOSelector_1;
 	hasRequiredUTXOSelector = 1;
+	const { rpcErrorMessage } = requireRpcErrorMessage();
 	const { InsufficientFundsError } = requireErrors();
 	const { estimateTransactionVbytes } = requireFeeSizing();
 
@@ -2892,7 +2946,7 @@ function requireUTXOSelector () {
 	        return utxos.filter(utxo => !utxo.assetName || utxo.assetName === 'XNA');
 	      }
 	    } catch (error) {
-	      throw new Error(`Failed to get UTXOs: ${error.message}`);
+	      throw new Error(`Failed to get UTXOs: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -3494,7 +3548,10 @@ function requireAssetNameValidator () {
 	const { InvalidAssetNameError } = requireErrors();
 
 	const MIN_ASSET_LENGTH = 3;
-	const MAINNET_MAX_NAME_LENGTH = 32;
+	// Full-name caps, mirror of the node (assets_fromscript.cpp:31-47): the limit
+	// applies to the COMPLETE name, owner '!' and tags included, so a mainnet
+	// root is effectively capped at 30 (its owner token "ROOT!" must fit in 31).
+	const MAINNET_MAX_NAME_LENGTH = 31;
 	const TESTNET_MAX_NAME_LENGTH = 121;
 
 	const ROOT_NAME_CHARACTERS = /^[A-Z0-9._]{3,}$/;
@@ -4364,6 +4421,7 @@ var hasRequiredBaseAssetTransactionBuilder;
 function requireBaseAssetTransactionBuilder () {
 	if (hasRequiredBaseAssetTransactionBuilder) return BaseAssetTransactionBuilder_1;
 	hasRequiredBaseAssetTransactionBuilder = 1;
+	const { rpcErrorMessage } = requireRpcErrorMessage();
 	const { BurnManager, OwnerTokenManager, UTXOSelector, OutputOrderer } = requireManagers();
 	const { AssetNameValidator, AmountValidator } = requireValidators();
 
@@ -4424,6 +4482,9 @@ function requireBaseAssetTransactionBuilder () {
 	    // post-selection recompute). The fee rate is stable for the duration of
 	    // a single build, so cache the first lookup and reuse it.
 	    this._feeRatePromise = null;
+
+	    // NIP-040 marker for the localRawBuild metadata; resolved once per build.
+	    this._assetMarkerPromise = null;
 	  }
 
 	  /**
@@ -4516,7 +4577,7 @@ function requireBaseAssetTransactionBuilder () {
 
 	      return rawTx;
 	    } catch (error) {
-	      throw new Error(`Failed to create raw transaction: ${error.message}`);
+	      throw new Error(`Failed to create raw transaction: ${rpcErrorMessage(error)}`);
 	    }
 	  }
 
@@ -4679,8 +4740,62 @@ function requireBaseAssetTransactionBuilder () {
 	  }
 
 	  /**
+	   * NIP-040 marker for every asset output of the localRawBuild metadata.
+	   *
+	   * The chain decides which marker ("rvn" or "xna") new asset outputs must
+	   * carry, per network and height, and the node reports the one required for
+	   * the next block as `getblockchaininfo.asset_marker` (node commit 347362b).
+	   * Resolution order:
+	   *   1. `params.assetMarker` (explicit caller override — offline builds,
+	   *      tests, or a node this library should not ask);
+	   *   2. `getblockchaininfo.asset_marker` from the connected node;
+	   *   3. `'rvn'` when the node predates the field or the call fails
+	   *      (matches what such a node enforces; documented in the README).
+	   * The RPC-built transaction path never needs this: the node stamps the
+	   * marker itself in `createrawtransaction`.
+	   *
+	   * @returns {Promise<'rvn'|'xna'>} Marker for locally built asset outputs
+	   */
+	  resolveAssetMarker() {
+	    if (!this._assetMarkerPromise) {
+	      this._assetMarkerPromise = this._fetchAssetMarker();
+	    }
+	    return this._assetMarkerPromise;
+	  }
+
+	  async _fetchAssetMarker() {
+	    const override = this.params.assetMarker;
+	    if (override !== undefined && override !== null) {
+	      if (override !== 'rvn' && override !== 'xna') {
+	        throw new Error(
+	          `Invalid assetMarker: ${override} (expected 'rvn' or 'xna', the value of getblockchaininfo.asset_marker)`
+	        );
+	      }
+	      return override;
+	    }
+
+	    let info = null;
+	    try {
+	      info = await this.rpc('getblockchaininfo', []);
+	    } catch (error) {
+	      return 'rvn';
+	    }
+	    const marker = info ? info.asset_marker : undefined;
+	    if (marker === undefined || marker === null) {
+	      return 'rvn';
+	    }
+	    if (marker !== 'rvn' && marker !== 'xna') {
+	      throw new Error(`Node reported an unknown asset_marker: ${marker}`);
+	    }
+	    return marker;
+	  }
+
+	  /**
 	   * Build a typed local raw build payload compatible with
 	   * @neuraiproject/neurai-create-transaction createFromOperation(...)
+	   *
+	   * Stamps the NIP-040 `assetMarker` (see resolveAssetMarker) so
+	   * createFromOperation >= 0.7.0 emits the marker the chain requires.
 	   *
 	   * @param {string} operationType - Operation type
 	   * @param {Array} inputs - Builder inputs
@@ -4688,9 +4803,9 @@ function requireBaseAssetTransactionBuilder () {
 	   * @param {string|null} changeAddress - XNA change address
 	   * @param {number|null} changeAmount - XNA change amount in XNA
 	   * @param {object} operationParams - Operation-specific params
-	   * @returns {{ operationType: string, params: object }} Local raw build
+	   * @returns {Promise<{ operationType: string, params: object }>} Local raw build
 	   */
-	  buildLocalRawBuild(
+	  async buildLocalRawBuild(
 	    operationType,
 	    inputs,
 	    burnInfo = null,
@@ -4700,6 +4815,7 @@ function requireBaseAssetTransactionBuilder () {
 	  ) {
 	    const params = {
 	      inputs: this.toRawTxInputs(inputs),
+	      assetMarker: await this.resolveAssetMarker(),
 	      ...operationParams
 	    };
 
@@ -4836,7 +4952,7 @@ function requireBaseAssetTransactionBuilder () {
 	      return assetData !== null && assetData !== undefined;
 	    } catch (error) {
 	      // If asset doesn't exist, RPC will throw error
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        return false;
 	      }
 	      // Re-throw other errors
@@ -4853,7 +4969,7 @@ function requireBaseAssetTransactionBuilder () {
 	    try {
 	      return await this.rpc('getassetdata', [assetName]);
 	    } catch (error) {
-	      if (error.message && error.message.includes('not found')) {
+	      if (rpcErrorMessage(error).includes('not found')) {
 	        return null;
 	      }
 	      throw error;
@@ -5039,7 +5155,7 @@ function requireIssueRootBuilder () {
 	        assetName,
 	        ownerTokenName: assetName + '!',
 	        operationType: 'ISSUE_ROOT',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'ISSUE_ROOT',
 	          inputs,
 	          burnInfo,
@@ -5307,7 +5423,7 @@ function requireIssueSubBuilder () {
 	        ownerTokenName: assetName + '!',
 	        parentOwnerTokenUsed: ownerTokenName,
 	        operationType: 'ISSUE_SUB',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'ISSUE_SUB',
 	          inputs,
 	          burnInfo,
@@ -5477,7 +5593,7 @@ function requireIssueDepinBuilder () {
 	        assetName,
 	        ownerTokenName: `${assetName}!`,
 	        operationType: 'ISSUE_DEPIN',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'ISSUE_DEPIN',
 	          inputs,
 	          burnInfo,
@@ -5745,7 +5861,7 @@ function requireReissueBuilder () {
 	        previousSupply: currentSupply,
 	        reissuableLocked: reissuable === false,
 	        operationType: 'REISSUE',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'REISSUE',
 	          inputs,
 	          burnInfo,
@@ -6008,7 +6124,7 @@ function requireTransferBuilder () {
 	        isDepin,
 	        ownerTokenUsed: isDepin ? ownerTokenName : null,
 	        operationType: 'TRANSFER',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'TRANSFER',
 	          inputs,
 	          null, // no burn
@@ -6292,7 +6408,7 @@ function requireIssueUniqueBuilder () {
 	        nftCount,
 	        ownerTokenUsed: ownerTokenName,
 	        operationType: 'ISSUE_UNIQUE',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'ISSUE_UNIQUE',
 	          inputs,
 	          burnInfo,
@@ -6553,7 +6669,7 @@ function requireIssueQualifierBuilder () {
 	        parentQualifier: isSub ? parsed.parent : null,
 	        parentQualifierUsed: parentQualifierName,
 	        operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
 	          inputs,
 	          burnInfo,
@@ -6807,7 +6923,7 @@ function requireIssueRestrictedBuilder () {
 	        verifierString,
 	        requiredQualifiers,
 	        operationType: 'ISSUE_RESTRICTED',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'ISSUE_RESTRICTED',
 	          inputs,
 	          burnInfo,
@@ -7093,7 +7209,7 @@ function requireReissueRestrictedBuilder () {
 	        requiredQualifiers,
 	        reissuableLocked: reissuable === false,
 	        operationType: 'REISSUE_RESTRICTED',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          'REISSUE_RESTRICTED',
 	          inputs,
 	          burnInfo,
@@ -7335,7 +7451,7 @@ function requireTagAddressBuilder () {
 	        targetAddresses,
 	        addressCount,
 	        operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
 	          inputs,
 	          burnInfo,
@@ -7597,7 +7713,7 @@ function requireFreezeAddressBuilder () {
 	        targetAddresses: targetAddresses.length > 0 ? targetAddresses : null,
 	        addressCount: targetAddresses.length,
 	        operationType,
-	        localRawBuild: this.buildLocalRawBuild(
+	        localRawBuild: await this.buildLocalRawBuild(
 	          operationType,
 	          inputs,
 	          null,
@@ -7758,6 +7874,10 @@ function requireNeuraiAssets () {
 	   * @param {Array<string>} config.addresses - Wallet addresses
 	   * @param {string} config.changeAddress - Default change address
 	   * @param {string} config.toAddress - Default receiving address
+	   * @param {('rvn'|'xna')} [config.assetMarker] - NIP-040 marker for locally
+	   *   built raw transactions. Omit to use the node's
+	   *   getblockchaininfo.asset_marker (falls back to 'rvn' on nodes that do
+	   *   not report it). Per-operation params.assetMarker overrides this.
 	   */
 	  constructor(rpc, config = {}) {
 	    if (!rpc || typeof rpc !== 'function') {
@@ -7795,7 +7915,10 @@ function requireNeuraiAssets () {
 	      network: this.config.network,
 	      walletAddresses: this.config.addresses,
 	      changeAddress: params.changeAddress || this.config.changeAddress,
-	      toAddress: params.toAddress || this.config.toAddress
+	      toAddress: params.toAddress || this.config.toAddress,
+	      // NIP-040: marker for the localRawBuild metadata. Undefined lets the
+	      // builder ask the node (getblockchaininfo.asset_marker).
+	      assetMarker: params.assetMarker !== undefined ? params.assetMarker : this.config.assetMarker
 	    };
 	  }
 

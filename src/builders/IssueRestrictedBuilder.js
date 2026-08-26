@@ -220,7 +220,7 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
         verifierString,
         requiredQualifiers,
         operationType: 'ISSUE_RESTRICTED',
-        localRawBuild: this.buildLocalRawBuild(
+        localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_RESTRICTED',
           inputs,
           burnInfo,
