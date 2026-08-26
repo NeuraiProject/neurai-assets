@@ -302,3 +302,51 @@ describe('Local Raw Build NIP-040 marker', () => {
     expect(failed.message).to.contain('Invalid assetMarker');
   });
 });
+
+describe('NIP-040 marker at NeuraiAssets config level (1.4.1 regression)', () => {
+  const NeuraiAssets = require('../../../src/NeuraiAssets');
+
+  function walletRpc(assetMarker) {
+    return createRpc({
+      assetMap: { ROOT: { amount: 10, reissuable: 1, units: 0 } },
+      xnaUtxos: [
+        { txid: '09'.repeat(32), outputIndex: 0, address: LEGACY_TEST_ADDRESS, satoshis: 5000000000000 }
+      ],
+      ownerUtxos: [
+        { txid: '0a'.repeat(32), outputIndex: 1, address: LEGACY_TEST_ADDRESS, assetName: 'ROOT!', satoshis: 100000000 }
+      ],
+      assetMarker
+    });
+  }
+
+  const baseConfig = {
+    network: 'xna-test',
+    addresses: [LEGACY_TEST_ADDRESS],
+    changeAddress: LEGACY_TEST_ADDRESS,
+    toAddress: LEGACY_TEST_ADDRESS
+  };
+
+  it('keeps config.assetMarker in this.config (the 1.4.0 constructor dropped it)', () => {
+    const assets = new NeuraiAssets(walletRpc('xna'), { ...baseConfig, assetMarker: 'rvn' });
+    expect(assets.config.assetMarker).to.equal('rvn');
+  });
+
+  it('config-level override reaches the builders and beats the node', async () => {
+    const assets = new NeuraiAssets(walletRpc('xna'), { ...baseConfig, assetMarker: 'rvn' });
+    const result = await assets.reissueAsset({ assetName: 'ROOT', quantity: 4 });
+    expect(result.localRawBuild.params.assetMarker).to.equal('rvn');
+  });
+
+  it('per-operation assetMarker still wins over the config override', async () => {
+    const assets = new NeuraiAssets(walletRpc('rvn'), { ...baseConfig, assetMarker: 'rvn' });
+    const result = await assets.reissueAsset({ assetName: 'ROOT', quantity: 4, assetMarker: 'xna' });
+    expect(result.localRawBuild.params.assetMarker).to.equal('xna');
+  });
+
+  it('updateConfig can set the override after construction', async () => {
+    const assets = new NeuraiAssets(walletRpc('xna'), { ...baseConfig });
+    assets.updateConfig({ assetMarker: 'rvn' });
+    const result = await assets.reissueAsset({ assetName: 'ROOT', quantity: 4 });
+    expect(result.localRawBuild.params.assetMarker).to.equal('rvn');
+  });
+});

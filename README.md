@@ -2,6 +2,11 @@
 
 Complete asset management library for Neurai blockchain. Supports creation, reissuance, and queries for all asset types in a non-custodial way.
 
+> **1.4.1**: fix — the constructor dropped `config.assetMarker`, so the
+> wallet-level override documented in 1.4.0 never reached the builders
+> (per-operation `params.assetMarker` was unaffected). Precedence is now
+> effective: `params.assetMarker` > `config.assetMarker` > node.
+>
 > **1.4.0**: NIP-040 `assetMarker` in `localRawBuild` (see below); RPC
 > rejection messages from `@neuraiproject/neurai-rpc` >= 0.5 are surfaced
 > correctly (they carry no `.message`); name-length caps now mirror the node

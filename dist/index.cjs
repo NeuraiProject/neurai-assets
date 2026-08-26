@@ -7889,7 +7889,11 @@ function requireNeuraiAssets () {
 	      network: config.network || 'xna',
 	      addresses: config.addresses || [],
 	      changeAddress: config.changeAddress || null,
-	      toAddress: config.toAddress || null
+	      toAddress: config.toAddress || null,
+	      // NIP-040: documented since 1.4.0 but dropped here until 1.4.1, which
+	      // made the config-level override silently inoperative (per-operation
+	      // params.assetMarker was unaffected).
+	      assetMarker: config.assetMarker
 	    };
 
 	    // Initialize query interface
