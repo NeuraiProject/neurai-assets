@@ -144,34 +144,20 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
       changeAddress, // owner token return goes to change address
       toAddress,
     ];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    // Fund the XNA side. The owner-token input counts towards the size
+    // estimate from the first round and is excluded from XNA selection.
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: [ownerTokenUTXO],
+      exclude: [ownerTokenUTXO],
+      initialInputHint: 1
+    });
 
-    // 9. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 10. Select XNA UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 11. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
-    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 12. Verify we have enough XNA
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 13. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 14. Build inputs (XNA + owner token)
     const inputs = [];
@@ -202,8 +188,8 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Reissue restricted operation
@@ -223,8 +209,30 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
     // 16. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 17. Create raw transaction
-    const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
+    // 17. Canonical build — also the source of the raw transaction. Same
+    // reasoning as in ReissueBuilder: the node's `createrawtransaction` has no
+    // units field for a reissue (the `reissue_restricted` object included), so
+    // that path rejects any asset with units > 0; the local codec encodes
+    // "keep the current units" (0xff).
+    const createTransactionBuild = await this.buildCreateTransactionBuild(
+      'REISSUE_RESTRICTED',
+      inputs,
+      { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+      {
+        toAddress,
+        assetName,
+        quantityRaw: this.assetAmountToRaw(quantity, assetData.units || 0, 'quantity'),
+        // Omitted on purpose — see the note in ReissueBuilder: this
+        // library never changes an asset's units, so it says "keep them"
+        // (0xff) rather than echoing a value that could be stale.
+
+        reissuable: reissuable !== undefined ? reissuable : undefined,
+        ipfsHash: newIpfs || undefined,
+        ownerChangeAddress: this.params.ownerChangeAddress || changeAddress,
+        verifierString: changeVerifier ? newVerifier : undefined
+      }
+    );
+    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
 
     // 18. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
@@ -252,12 +260,14 @@ class ReissueRestrictedBuilder extends BaseAssetTransactionBuilder {
         requiredQualifiers,
         reissuableLocked: reissuable === false,
         operationType: 'REISSUE_RESTRICTED',
+        buildStrategy: 'local-builder',
+        createTransactionBuild,
         localRawBuild: await this.buildLocalRawBuild(
           'REISSUE_RESTRICTED',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

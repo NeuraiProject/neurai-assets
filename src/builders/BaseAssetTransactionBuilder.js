@@ -15,8 +15,29 @@
  */
 
 const { rpcErrorMessage } = require('../utils/rpcErrorMessage');
+const { createFromOperation } = require('@neuraiproject/neurai-create-transaction');
 const { BurnManager, OwnerTokenManager, UTXOSelector, OutputOrderer } = require('../managers');
 const { AssetNameValidator, AmountValidator } = require('../validators');
+const { getNetworkConfig } = require('../constants/networks');
+const {
+  assetAmountToRaw,
+  xnaAmountToSats,
+  formatRawAsDecimal,
+  rawToDisplayNumber,
+  toProtocolInteger,
+  sumProtocolIntegers
+} = require('../utils/assetAmount');
+
+/** Outputs below this are dust and are dropped instead of created. */
+const DUST_SATS = 1n;
+
+/**
+ * Backstop for the funding loop. Each round consumes at least one new outpoint,
+ * so a wallet needs more than this many UTXOs in a single transaction before
+ * the limit is even reachable; it exists so a pathological fee curve fails
+ * with a clear message instead of looping.
+ */
+const MAX_FUNDING_ROUNDS = 32;
 
 class BaseAssetTransactionBuilder {
   /**
@@ -138,14 +159,140 @@ class BaseAssetTransactionBuilder {
    * @param {number} assetAmount - Asset amount if needed
    * @returns {Promise<object>} Selected UTXOs
    */
-  async selectUTXOs(xnaAmount, assetName = null, assetAmount = 0) {
+  async selectUTXOs(xnaAmount, assetName = null, assetAmount = 0, options = {}) {
     const addresses = await this._getAddresses();
     return this.utxoSelector.selectMixedUTXOs(
       addresses,
       xnaAmount,
       assetName,
-      assetAmount
+      assetAmount,
+      options
     );
+  }
+
+  /**
+   * Estimate the transaction fee in exact satoshis.
+   *
+   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+   * @param {number|Array} outputs - Output count or array of address-like descriptors
+   * @returns {Promise<bigint>} Estimated fee in satoshis
+   */
+  async estimateFeeSats(inputs, outputs) {
+    if (!this._feeRatePromise) {
+      this._feeRatePromise = this.utxoSelector.getFeeRate();
+    }
+    const feeRate = await this._feeRatePromise;
+    return this.utxoSelector.estimateFeeSats(inputs, outputs, feeRate);
+  }
+
+  /**
+   * Fund the XNA side of a transaction, exactly.
+   *
+   * Replaces the "estimate once, select once, top up with a `+0.001` cushion"
+   * pattern that every builder carried. That pattern had three defects, all of
+   * which only surface when the top-up branch actually runs — which depends on
+   * the *value* of the selected UTXOs, not on the size of the transaction:
+   *
+   *   1. the second selection re-queried the node without excluding what the
+   *      first one took, and the greedy order is deterministic, so it handed
+   *      back the same largest outpoint and the transaction spent it twice;
+   *   2. the fee was never recomputed, so the inputs added by the top-up were
+   *      not paid for;
+   *   3. the `+0.001 XNA` cushion did not pay for them either — it only
+   *      enlarged the selection target and came back as change.
+   *
+   * Here each round excludes every outpoint already held, recomputes the fee
+   * from the real (PQ-aware) descriptors of the full input set, and loops
+   * until the funds cover burn + fee. Running out of funds throws
+   * InsufficientFundsError from the selector; it never returns underfunded.
+   *
+   * @param {object} options
+   * @param {Array} options.outputs - Output descriptors for the size estimate
+   * @param {bigint} [options.burnSats] - Burn amount that the inputs must also cover
+   * @param {Array} [options.extraInputs] - Non-XNA inputs already committed (asset, owner token)
+   * @param {Array} [options.exclude] - Outpoints that must not be selected
+   * @param {number} [options.initialInputHint] - Assumed XNA input count for the first estimate
+   * @returns {Promise<{utxos: Array, totalSats: bigint, feeSats: bigint, changeSats: bigint, rounds: number}>}
+   */
+  async fundXnaInputs(options) {
+    const {
+      outputs,
+      burnSats = 0n,
+      extraInputs = [],
+      exclude = [],
+      initialInputHint = 1
+    } = options;
+
+    const addresses = await this._getAddresses();
+    const excluded = UTXOSelector.toOutpointSet(exclude);
+    // toOutpointSet returns the caller's Set untouched when it already is one;
+    // copy so this method never mutates what it was handed.
+    const held = new Set(excluded);
+
+    const selected = [];
+    let totalSats = 0n;
+    // First estimate assumes `initialInputHint` legacy XNA inputs; the loop
+    // corrects it as soon as the real descriptors are known.
+    let feeSats = await this.estimateFeeSats(
+      [...extraInputs, ...new Array(initialInputHint).fill({})],
+      outputs
+    );
+    let rounds = 0;
+
+    for (;;) {
+      const requiredSats = burnSats + feeSats;
+      if (totalSats >= requiredSats) {
+        break;
+      }
+
+      if (rounds >= MAX_FUNDING_ROUNDS) {
+        throw new Error(
+          `XNA funding did not converge after ${MAX_FUNDING_ROUNDS} rounds ` +
+          `(need ${formatRawAsDecimal(requiredSats)} XNA, hold ` +
+          `${formatRawAsDecimal(totalSats)} XNA)`
+        );
+      }
+      rounds += 1;
+
+      const selection = await this.utxoSelector.selectBaseCurrencyUTXOs(
+        addresses,
+        null,
+        0.1,
+        { requiredSats: requiredSats - totalSats, exclude: held }
+      );
+
+      selection.utxos.forEach(utxo => {
+        held.add(UTXOSelector.outpointKey(utxo));
+        selected.push(utxo);
+      });
+      totalSats += selection.totalSats;
+
+      // The fee must reflect every input it is paying for.
+      feeSats = await this.estimateFeeSats([...extraInputs, ...selected], outputs);
+    }
+
+    return {
+      utxos: selected,
+      totalSats,
+      feeSats,
+      changeSats: totalSats - burnSats - feeSats,
+      rounds
+    };
+  }
+
+  /**
+   * The network label understood by neurai-create-transaction.
+   *
+   * `this.network` accepts aliases (`mainnet`, `testnet`, `regtest`,
+   * `mainnet-pq`, ...) that the serializer does not know. Its
+   * `resolveNetworkFamily` treats every unrecognised value as testnet, so
+   * passing the alias `'mainnet'` straight through would make a mainnet build
+   * slip past the DePIN guard that correctly rejects `'xna'`.
+   *
+   * @returns {'xna'|'xna-test'} Canonical network label
+   */
+  canonicalNetwork() {
+    return getNetworkConfig(this.network).baseNetwork;
   }
 
   /**
@@ -171,6 +318,30 @@ class BaseAssetTransactionBuilder {
       return rawTx;
     } catch (error) {
       throw new Error(`Failed to create raw transaction: ${rpcErrorMessage(error)}`);
+    }
+  }
+
+  /**
+   * Build the raw transaction locally from a canonical build, without the
+   * node's `createrawtransaction`.
+   *
+   * The reissue builders use this instead of buildRawTransaction: the RPC's
+   * `reissue` object has no field for units and the node fills in 0, so that
+   * path rejects any asset whose units are above zero (`unit must be larger
+   * than current unit selection`). The local codec encodes "keep the current
+   * units" (0xff) — the same default the node's own `reissue` RPC uses — and
+   * emits the same outputs the node would: owner-token return auto-generated,
+   * operation output last.
+   *
+   * @param {{operationType: string, params: object}} createTransactionBuild -
+   *   Canonical payload, as produced by buildCreateTransactionBuild
+   * @returns {string} Raw transaction hex, ready for signing
+   */
+  buildRawTransactionLocally(createTransactionBuild) {
+    try {
+      return createFromOperation(createTransactionBuild).rawTx;
+    } catch (error) {
+      throw new Error(`Failed to create raw transaction locally: ${error.message}`);
     }
   }
 
@@ -344,21 +515,53 @@ class BaseAssetTransactionBuilder {
    *   1. `params.assetMarker` (explicit caller override — offline builds,
    *      tests, or a node this library should not ask);
    *   2. `getblockchaininfo.asset_marker` from the connected node;
-   *   3. `'rvn'` when the node predates the field or the call fails
-   *      (matches what such a node enforces; documented in the README).
-   * The RPC-built transaction path never needs this: the node stamps the
-   * marker itself in `createrawtransaction`.
+   *   3. `'rvn'` when the node predates the field (a node without it enforces
+   *      the legacy marker, so that is the right answer, not a guess).
+   *
+   * An RPC *failure* is a different case, and `params.assetMarkerPolicy`
+   * decides it:
+   *   - `'legacy-fallback'` (default in 1.x) resolves `'rvn'`, preserving the
+   *     1.4.x behaviour;
+   *   - `'strict'` propagates the failure. On a post-NIP-040 chain a build
+   *     that guessed `'rvn'` produces a transaction the node rejects with
+   *     `bad-txns-legacy-asset-marker-after-nip040`, so an online wallet
+   *     should not treat "the node did not answer" as "the node said rvn".
+   *
+   * A value present but outside `rvn`/`xna` is an error under both policies.
+   * The RPC-built transaction path never needs any of this: the node stamps
+   * the marker itself in `createrawtransaction`.
    *
    * @returns {Promise<'rvn'|'xna'>} Marker for locally built asset outputs
    */
   resolveAssetMarker() {
     if (!this._assetMarkerPromise) {
+      // Memoized including rejection, so a strict failure is one RPC call and
+      // one error, not one per asset output.
       this._assetMarkerPromise = this._fetchAssetMarker();
     }
     return this._assetMarkerPromise;
   }
 
+  /**
+   * Resolve the configured marker failure policy.
+   *
+   * @returns {'strict'|'legacy-fallback'} Policy in force for this build
+   */
+  assetMarkerPolicy() {
+    const policy = this.params.assetMarkerPolicy;
+    if (policy === undefined || policy === null) {
+      return 'legacy-fallback';
+    }
+    if (policy !== 'strict' && policy !== 'legacy-fallback') {
+      throw new Error(
+        `Invalid assetMarkerPolicy: ${policy} (expected 'strict' or 'legacy-fallback')`
+      );
+    }
+    return policy;
+  }
+
   async _fetchAssetMarker() {
+    const policy = this.assetMarkerPolicy();
     const override = this.params.assetMarker;
     if (override !== undefined && override !== null) {
       if (override !== 'rvn' && override !== 'xna') {
@@ -373,10 +576,19 @@ class BaseAssetTransactionBuilder {
     try {
       info = await this.rpc('getblockchaininfo', []);
     } catch (error) {
+      if (policy === 'strict') {
+        throw new Error(
+          `Cannot resolve the NIP-040 asset marker: getblockchaininfo failed ` +
+          `(${rpcErrorMessage(error)}). Under assetMarkerPolicy 'strict' this ` +
+          `is not downgraded to 'rvn', which a post-NIP-040 chain would reject. ` +
+          `Pass params.assetMarker to build offline.`
+        );
+      }
       return 'rvn';
     }
     const marker = info ? info.asset_marker : undefined;
     if (marker === undefined || marker === null) {
+      // A valid answer from a node that predates the field: legacy is correct.
       return 'rvn';
     }
     if (marker !== 'rvn' && marker !== 'xna') {
@@ -428,6 +640,106 @@ class BaseAssetTransactionBuilder {
       operationType,
       params
     };
+  }
+
+  /**
+   * Build the canonical `createTransactionBuild` payload: the exact shape
+   * `createFromOperation(...)` accepts, with no adaptation, renaming or
+   * rescaling left for the consumer.
+   *
+   * Differences from the deprecated `buildLocalRawBuild`:
+   *   - every amount is a protocol integer (`bigint`), never a display value
+   *     under a `*Raw` name;
+   *   - a transfer carries a discriminant the serializer knows
+   *     (`STANDARD_TRANSFER` / `TRANSFER_DEPIN`), not the internal `TRANSFER`;
+   *   - the network, when included, is the canonical label, so the DePIN
+   *     mainnet guard actually runs.
+   *
+   * @param {string} operationType - Canonical create-transaction discriminant
+   * @param {Array} inputs - Builder inputs
+   * @param {object} [envelope] - XNA envelope
+   * @param {string} [envelope.burnAddress] - Burn address
+   * @param {bigint} [envelope.burnSats] - Burn amount in satoshis
+   * @param {string} [envelope.changeAddress] - XNA change address
+   * @param {bigint} [envelope.changeSats] - XNA change in satoshis
+   * @param {object} [operationParams] - Operation-specific canonical params
+   * @returns {Promise<{operationType: string, params: object}>} Canonical build
+   */
+  async buildCreateTransactionBuild(
+    operationType,
+    inputs,
+    envelope = {},
+    operationParams = {}
+  ) {
+    const params = {
+      inputs: this.toRawTxInputs(inputs),
+      assetMarker: await this.resolveAssetMarker(),
+      ...operationParams
+    };
+
+    if (envelope.burnAddress && envelope.burnSats !== undefined && envelope.burnSats !== null) {
+      params.burnAddress = envelope.burnAddress;
+      params.burnAmountSats = toProtocolInteger(envelope.burnSats, 'burnSats');
+    }
+
+    if (
+      envelope.changeAddress &&
+      envelope.changeSats !== undefined &&
+      envelope.changeSats !== null &&
+      toProtocolInteger(envelope.changeSats, 'changeSats') >= DUST_SATS
+    ) {
+      params.xnaChangeAddress = envelope.changeAddress;
+      params.xnaChangeSats = toProtocolInteger(envelope.changeSats, 'changeSats');
+    }
+
+    return {
+      operationType,
+      params
+    };
+  }
+
+  /**
+   * Convert a user-facing asset amount to the raw protocol integer.
+   *
+   * @param {string|number} amount - Display amount
+   * @param {number} [units] - Asset decimal places, for the divisibility check
+   * @param {string} [label] - Prefix for error messages
+   * @returns {bigint} Raw amount, 10^8-scaled
+   */
+  assetAmountToRaw(amount, units, label) {
+    return assetAmountToRaw(amount, units, { label: label || 'asset amount' });
+  }
+
+  /**
+   * Convert a user-facing XNA amount to satoshis.
+   *
+   * @param {string|number} amount - Display XNA amount
+   * @param {object} [options] - Passed through to xnaAmountToSats
+   * @returns {bigint} Satoshis
+   */
+  xnaAmountToSats(amount, options) {
+    return xnaAmountToSats(amount, options);
+  }
+
+  /**
+   * Render a protocol integer as the display value the RPC envelope expects.
+   *
+   * @param {bigint} sats - Protocol integer
+   * @returns {number} Display amount
+   */
+  satsToDisplay(sats) {
+    return rawToDisplayNumber(sats, 'display amount');
+  }
+
+  /**
+   * Sum the `satoshis` field of UTXOs exactly.
+   *
+   * @param {Array} utxos - UTXOs
+   * @param {string} [label] - Prefix for error messages
+   * @returns {bigint} Exact total
+   */
+  sumSatoshis(utxos, label) {
+    return sumProtocolIntegers(utxos, 'satoshis', label || 'utxo.satoshis');
   }
 
   /**

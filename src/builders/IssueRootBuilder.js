@@ -85,36 +85,23 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
-    // 5. Estimate fee (rough estimate for initial UTXO selection)
-    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
-    const estimatedFee = await this.estimateFee(1, outputAddresses);
+    // 5-10. Fund the XNA side. fundXnaInputs recomputes the fee with the real
+    //       (PQ-aware) descriptors after every top-up and never selects an
+    //       outpoint it already holds.
+    const outputAddresses = [
+      burnInfo.address,
+      changeAddress,
+      // Asset outputs carry a payload; sizing them as bare P2PKH under-counts
+      // the transaction and trips the node's minimum relay fee.
+      { address: toAddress, assetName, kind: 'issue', hasIpfs },
+      { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },
+    ];
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({ outputs: outputAddresses, burnSats });
 
-    // 6. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 7. Select UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 8. Recalculate fee with actual inputs (PQ-aware)
-    const actualFee = await this.estimateFee(baseCurrencyUTXOs, outputAddresses);
-
-    // 9. Verify we still have enough after fee recalculation
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      // Need to select more UTXOs
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001; // Add small buffer
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 10. Calculate final totals
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 11. Build inputs
     const inputs = baseCurrencyUTXOs.map(utxo => ({
@@ -131,9 +118,9 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
+    if (xnaChangeSats > 0n) {
       // Only add change if meaningful amount
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Issue operation
@@ -166,12 +153,26 @@ class IssueRootBuilder extends BaseAssetTransactionBuilder {
         assetName,
         ownerTokenName: assetName + '!',
         operationType: 'ISSUE_ROOT',
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          'ISSUE_ROOT',
+          inputs,
+          { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.assetAmountToRaw(quantity, units, 'quantity'),
+            units,
+            reissuable,
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            ownerTokenAddress: changeAddress
+          }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_ROOT',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

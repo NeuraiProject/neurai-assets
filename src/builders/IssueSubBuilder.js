@@ -126,37 +126,24 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      changeAddress, // owner token return goes to change address
-      toAddress,
+      { address: changeAddress, assetName: ownerTokenName, kind: 'owner' },
+      { address: toAddress, assetName, kind: 'issue', hasIpfs },
+      { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },
     ];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    // 9-13. Fund the XNA side. The parent owner-token input counts towards the
+    //       size estimate from the first round and is excluded from selection.
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: [ownerTokenUTXO],
+      exclude: [ownerTokenUTXO],
+      initialInputHint: 1
+    });
 
-    // 9. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 10. Select XNA UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 11. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
-    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 12. Verify we have enough XNA
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 13. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 14. Build inputs (XNA + owner token)
     const inputs = [];
@@ -187,8 +174,8 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Third: Owner token return (CRITICAL - must return or lost forever!)
@@ -235,12 +222,26 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
         ownerTokenName: assetName + '!',
         parentOwnerTokenUsed: ownerTokenName,
         operationType: 'ISSUE_SUB',
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          'ISSUE_SUB',
+          inputs,
+          { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.assetAmountToRaw(quantity, units, 'quantity'),
+            units,
+            reissuable,
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            parentOwnerAddress: changeAddress
+          }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_SUB',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

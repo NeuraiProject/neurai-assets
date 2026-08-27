@@ -5,33 +5,55 @@
 
 const { ASSET_LIMITS } = require('../constants');
 const { InvalidAmountError, InvalidUnitsError } = require('../errors');
+const { normalizeDecimalText } = require('../utils/assetAmount');
 
 class AmountValidator {
   /**
-   * Validate asset quantity
-   * @param {number} quantity - Asset quantity
+   * Validate asset quantity.
+   *
+   * Accepts a decimal **string** as well as a number. That is not a
+   * convenience: above `MAX_SAFE_INTEGER / 1e8` (~90071992.55) a fractional
+   * `number` can no longer name every 8-decimal value, so `assetAmountToRaw`
+   * refuses it and asks for a string. Rejecting strings here would leave
+   * legitimate supplies — `100000000.5`, far below MAX_QUANTITY —
+   * unexpressible in either form.
+   *
+   * @param {number|string} quantity - Asset quantity
    * @param {number} units - Decimal places (0-8)
    */
   static validate(quantity, units = 0) {
-    // Validate quantity is a number
-    if (typeof quantity !== 'number' || isNaN(quantity)) {
-      throw new InvalidAmountError('Quantity must be a valid number', quantity);
+    // Validate quantity is a number or a plain decimal string
+    if (typeof quantity === 'string') {
+      // Throws with an actionable message for anything that is not a plain
+      // decimal (exponent notation, empty, non-numeric).
+      normalizeDecimalText(quantity, 'Quantity');
+    } else if (typeof quantity !== 'number' || isNaN(quantity)) {
+      throw new InvalidAmountError(
+        'Quantity must be a valid number or a decimal string',
+        quantity
+      );
     }
 
+    // Small magnitudes convert exactly, so `Number` is fine for the lower
+    // bounds. The UPPER bound is not: `Number('21000000000.00000001')` is
+    // `21000000000`, which would slip past a numeric comparison — so that one
+    // is done on the digits themselves (see exceedsMaxQuantity).
+    const numeric = Number(quantity);
+
     // Validate quantity is positive
-    if (quantity <= 0) {
+    if (numeric <= 0) {
       throw new InvalidAmountError('Quantity must be greater than 0', quantity);
     }
 
     // Validate quantity is within limits
-    if (quantity < ASSET_LIMITS.MIN_QUANTITY) {
+    if (numeric < ASSET_LIMITS.MIN_QUANTITY) {
       throw new InvalidAmountError(
         `Quantity must be at least ${ASSET_LIMITS.MIN_QUANTITY}`,
         quantity
       );
     }
 
-    if (quantity > ASSET_LIMITS.MAX_QUANTITY) {
+    if (this.exceedsMaxQuantity(quantity)) {
       throw new InvalidAmountError(
         `Quantity cannot exceed ${ASSET_LIMITS.MAX_QUANTITY}`,
         quantity
@@ -51,6 +73,33 @@ class AmountValidator {
     }
 
     return true;
+  }
+
+  /**
+   * Whether a quantity is above MAX_QUANTITY, compared on the digits.
+   *
+   * A numeric comparison is not enough at this magnitude: `MAX_QUANTITY` is
+   * `21000000000`, and `Number('21000000000.00000001')` collapses to exactly
+   * `21000000000`, so the excess disappears before the comparison happens.
+   * `assetAmountToRaw` catches it afterwards against the consensus ceiling —
+   * the flow does fail closed — but this validator would have reported the
+   * value as valid, and the two must state the same contract.
+   *
+   * @param {number|string} quantity - Quantity as given by the caller
+   * @returns {boolean} True when the value exceeds MAX_QUANTITY
+   */
+  static exceedsMaxQuantity(quantity) {
+    const text = normalizeDecimalText(quantity, 'Quantity');
+    const [intPart, fracPart = ''] = (text.startsWith('-') ? text.slice(1) : text).split('.');
+
+    const maxWhole = BigInt(ASSET_LIMITS.MAX_QUANTITY);
+    const whole = BigInt(intPart);
+
+    if (whole > maxWhole) {
+      return true;
+    }
+    // Exactly at the ceiling: any non-zero fraction puts it over.
+    return whole === maxWhole && /[1-9]/.test(fracPart);
   }
 
   /**

@@ -1,15 +1,35 @@
 /**
  * Output Orderer
- * Orders transaction outputs according to Neurai protocol requirements
+ * Orders the JSON outputs sent to the node's `createrawtransaction`.
  *
- * CRITICAL: Output ordering is mandatory for asset transactions
- *
- * Correct order:
+ * Order produced:
  * 1. All XNA outputs (burn addresses + change) FIRST
  * 2. Owner token change outputs SECOND
  * 3. Asset operations (issue, reissue, transfer, etc.) LAST
  *
- * Incorrect ordering will cause transaction rejection by the network.
+ * WHAT CONSENSUS ACTUALLY REQUIRES — this order is not it.
+ *
+ * The node locates only *some* outputs by position (src/assets/assets.cpp):
+ *
+ *   - new asset issuance: the issue payload must be the LAST output, and for
+ *     ISSUE_ROOT / ISSUE_SUB / ISSUE_DEPIN the new owner payload the one
+ *     before it (`IsNewAsset` / `AssetFromTransaction`). `OwnerFromTransaction`
+ *     begins with `if (!tx.IsNewAsset()) return false;`, so it does NOT govern
+ *     the owner token of the other families;
+ *   - reissue, qualifier issuance, restricted issuance and unique issuance:
+ *     only their own payload must be the LAST output. Their burns and owner
+ *     transfers are found by scanning every vout.
+ *
+ * Transfers are NOT positional at all: each output is recognised by its own
+ * payload. That is why the canonical create-transaction path lays a DePIN
+ * transfer out as `transfers → owner escort → XNA change` and the node accepts
+ * it, even though this class would produce the opposite order.
+ *
+ * So what is mandatory is the FINAL output of an issuance/reissue, plus the
+ * owner immediately before it for new assets. Everything else here is a
+ * convention for the RPC path, not a consensus rule. Do not use this class to
+ * reorder what `createFromOperation` produced: it emits a valid order of its
+ * own, and re-sorting it would break the positional rules that do apply.
  */
 
 const { AssetNameParser } = require('../utils');

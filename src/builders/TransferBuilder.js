@@ -61,13 +61,22 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
     // 1. Validate parameters
     this.validateParams(this.params);
 
-    const { assetName, recipients } = this.params;
+    const { assetName, recipients, units } = this.params;
 
-    // Total amount to send, in user-facing asset units (NOT raw 10^8 sats).
-    // selectAssetUTXOs / the createrawtransaction transfer output both expect
-    // display units and scale by 10^8 themselves — pre-multiplying would
-    // double-scale (see UTXOSelector.selectAssetUTXOs / BaseBuilder.toSatoshis).
-    const totalAssetUnits = recipients.reduce((sum, r) => sum + r.amount, 0);
+    // Every recipient is converted to its protocol integer FIRST and the
+    // totals are summed in raw. Summing display amounts and scaling the total
+    // afterwards (`Math.round(totalAssetUnits * 1e8)`) accumulates the float
+    // error of every recipient into the asset change.
+    const recipientsRaw = recipients.map((recipient, index) => ({
+      address: recipient.address,
+      assetName,
+      amountRaw: this.assetAmountToRaw(
+        recipient.amount,
+        units,
+        `recipients[${index}].amount`
+      )
+    }));
+    const totalRecipientRaw = recipientsRaw.reduce((sum, r) => sum + r.amountRaw, 0n);
 
     // 2. Addresses
     const addresses = await this._getAddresses();
@@ -101,46 +110,43 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
     //    potential output so the fee is never under-estimated.
     const outputAddresses = [
       changeAddress, // XNA change
-      ...recipients.map(r => r.address), // one transfer per recipient
-      changeAddress, // asset change (harmless over-count if absent)
-      ...(isDepin ? [changeAddress] : []), // owner token return
+      // One transfer per recipient. These carry an asset payload, so they must
+      // be declared as such: sized as bare P2PKH the fee falls below the node's
+      // minimum relay fee as soon as its fee rate approaches that floor.
+      ...recipients.map(r => ({ address: r.address, assetName })),
+      { address: changeAddress, assetName }, // asset change (harmless over-count if absent)
+      ...(isDepin
+        ? [{ address: changeAddress, assetName: ownerTokenName, kind: 'owner' }]
+        : []),
     ];
 
-    // 5. First (rough) fee estimate, then select asset + XNA UTXOs.
-    const estimatedFee = await this.estimateFee(isDepin ? 3 : 2, outputAddresses);
-    const utxoSelection = await this.selectUTXOs(estimatedFee, assetName, totalAssetUnits);
-    const assetUTXOs = utxoSelection.assetUTXOs;
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    let totalXNAInput = utxoSelection.totalXNA;
-
-    // Asset change computed in raw 10^8-sats to avoid float drift, then back to units.
-    const assetInputRawSats = assetUTXOs.reduce((sum, u) => sum + u.satoshis, 0);
-    const totalAssetRawSats = Math.round(totalAssetUnits * 100000000);
-    const assetChangeRawSats = assetInputRawSats - totalAssetRawSats;
-    const assetChangeUnits = assetChangeRawSats / 100000000;
-
-    // 6. Recompute the fee with the real inputs (PQ-aware), including the owner
-    //    token when DePIN, then top up XNA if the rough estimate fell short.
-    const actualFeeInputs = [
-      ...baseCurrencyUTXOs,
-      ...assetUTXOs,
-      ...(isDepin ? [ownerTokenUTXO] : []),
-    ];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    if (totalXNAInput < actualFee) {
-      const additionalNeeded = actualFee - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-      totalXNAInput += additionalSelection.totalXNA;
-    }
-
-    // 7. XNA change (no burn for a transfer)
-    const finalXNAInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
+    // 5. Select the asset UTXOs from the raw total, so the requirement is not
+    //    a display float that was scaled back up.
+    const assetSelection = await this.utxoSelector.selectAssetUTXOs(
+      addresses,
+      assetName,
+      undefined,
+      { requiredRaw: totalRecipientRaw }
     );
-    const xnaChange = finalXNAInput - actualFee;
+    const assetUTXOs = assetSelection.utxos;
+    const assetChangeRaw = assetSelection.totalRaw - totalRecipientRaw;
+
+    // 6. Fund the XNA side. The asset and owner-token inputs count towards the
+    //    size estimate from the first round (they are what makes a PQ transfer
+    //    expensive) and are excluded from XNA selection. fundXnaInputs
+    //    recomputes the fee after every top-up and never reuses an outpoint.
+    const committedInputs = [...assetUTXOs, ...(isDepin ? [ownerTokenUTXO] : [])];
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      extraInputs: committedInputs,
+      exclude: committedInputs,
+      initialInputHint: 1
+    });
+
+    const baseCurrencyUTXOs = funding.utxos;
+    const feeSats = funding.feeSats;
+    const xnaChangeSats = funding.changeSats;
+    const actualFee = this.satsToDisplay(feeSats);
 
     // 8. Build inputs: asset UTXOs + [owner token] + XNA UTXOs
     const inputs = [];
@@ -174,12 +180,16 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
       });
     });
 
-    // 9. Build outputs (unordered — outputOrderer enforces protocol order)
+    // 9. Build outputs (unordered — outputOrderer enforces protocol order).
+    //    These carry DISPLAY amounts: createrawtransaction runs them through
+    //    AmountFromValue and does the 10^8 scaling itself.
     const outputs = [];
+    const hasXnaChange = xnaChangeSats > 0n;
+    const assetChangeUnits = assetChangeRaw > 0n ? this.satsToDisplay(assetChangeRaw) : 0;
 
     // XNA change
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (hasXnaChange) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // One transfer per recipient (display units; the daemon scales by 10^8)
@@ -188,7 +198,7 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
     });
 
     // Asset change back to the sender
-    if (assetChangeRawSats > 0) {
+    if (assetChangeRaw > 0n) {
       outputs.push({
         [changeAddress]: OutputFormatter.formatTransferOutput(assetName, assetChangeUnits),
       });
@@ -214,7 +224,40 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
       ...(isDepin ? [ownerTokenUTXO] : []),
       ...baseCurrencyUTXOs,
     ];
-    const xnaChangeOut = xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null;
+    const xnaChangeOut = hasXnaChange ? this.satsToDisplay(xnaChangeSats) : null;
+
+    // Canonical transfers: recipients plus, at most, one asset change. The
+    // DePIN owner escort is NOT listed here — createDepinTransferTransaction
+    // emits it itself, and adding it would produce two "&NAME!" outputs.
+    const canonicalTransfers = [
+      ...recipientsRaw,
+      ...(assetChangeRaw > 0n
+        ? [{ address: changeAddress, assetName, amountRaw: assetChangeRaw }]
+        : [])
+    ];
+
+    const createTransactionBuild = isDepin
+      ? await this.buildCreateTransactionBuild(
+          'TRANSFER_DEPIN',
+          inputs,
+          { changeAddress, changeSats: xnaChangeSats },
+          {
+            transfers: canonicalTransfers,
+            ownerChangeAddress: changeAddress,
+            network: this.canonicalNetwork()
+          }
+        )
+      : await this.buildCreateTransactionBuild(
+          'STANDARD_TRANSFER',
+          inputs,
+          {}, // STANDARD_TRANSFER has no XNA envelope; change travels as a payment
+          {
+            payments: hasXnaChange
+              ? [{ address: changeAddress, valueSats: xnaChangeSats }]
+              : [],
+            transfers: canonicalTransfers
+          }
+        );
 
     return this.formatResult(
       rawTx,
@@ -226,10 +269,11 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
       {
         assetName,
         recipients: recipients.map(r => ({ address: r.address, amount: r.amount })),
-        assetChange: assetChangeRawSats > 0 ? assetChangeUnits : 0,
+        assetChange: assetChangeUnits,
         isDepin,
         ownerTokenUsed: isDepin ? ownerTokenName : null,
         operationType: 'TRANSFER',
+        createTransactionBuild,
         localRawBuild: await this.buildLocalRawBuild(
           'TRANSFER',
           inputs,
@@ -243,7 +287,7 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
               assetName,
               amount: r.amount,
             })),
-            assetChange: assetChangeRawSats > 0
+            assetChange: assetChangeRaw > 0n
               ? { address: changeAddress, assetName, amount: assetChangeUnits }
               : null,
             ownerReturn: isDepin

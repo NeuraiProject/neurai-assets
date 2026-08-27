@@ -102,30 +102,19 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     // 6. Estimate fee
     // Outputs: XNA change + freeze/unfreeze operation (sent to changeAddress)
     const outputAddresses = [changeAddress, changeAddress];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    // 7-10. Fund the XNA side (fee only, this operation does not burn). The
+    //       owner-token input counts towards the size estimate from the first
+    //       round and is excluded from XNA selection.
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      extraInputs: [ownerTokenUTXO],
+      exclude: [ownerTokenUTXO],
+      initialInputHint: 1
+    });
 
-    // 7. Select XNA UTXOs (only for fee, no burn)
-    const utxoSelection = await this.selectUTXOs(estimatedFee, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 8. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
-    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 9. Verify we have enough XNA for fee
-    if (totalXNAInput < actualFee) {
-      const additionalNeeded = actualFee - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 10. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 11. Build inputs (XNA + owner token)
     const inputs = [];
@@ -153,8 +142,8 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     const outputs = [];
 
     // First: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Freeze/Unfreeze operation
@@ -216,12 +205,27 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
         targetAddresses: targetAddresses.length > 0 ? targetAddresses : null,
         addressCount: targetAddresses.length,
         operationType,
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          operationType,
+          inputs,
+          { changeAddress, changeSats: xnaChangeSats },
+          operationType === 'FREEZE_ADDRESSES' || operationType === 'UNFREEZE_ADDRESSES'
+            ? {
+                assetName,
+                targetAddresses,
+                ownerChangeAddress: changeAddress
+              }
+            : {
+                assetName,
+                ownerChangeAddress: changeAddress
+              }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           operationType,
           inputs,
           null,
-          xnaChange > 0.00000001 ? changeAddress : null,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? changeAddress : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           operationType === 'FREEZE_ADDRESSES' || operationType === 'UNFREEZE_ADDRESSES'
             ? {
                 assetName,

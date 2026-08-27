@@ -45,9 +45,33 @@ const TESTNET_BURN_ADDRESSES = {
 };
 
 /**
+ * Regtest chainparams define ONE burn address for every asset operation
+ * (`strGlobalBurnAddress` in the node's chainparams.cpp), unlike mainnet and
+ * testnet which have a distinct address per operation.
+ *
+ * Regtest shares testnet's address prefix, so it was previously resolved to
+ * the testnet table. That works only for ISSUE_ROOT — whose testnet address
+ * happens to BE the regtest global one — and every other operation is
+ * rejected by consensus with `bad-txns-*-burn-not-found`, because the burn
+ * output pays an address the chain does not recognise for that operation.
+ */
+const REGTEST_GLOBAL_BURN_ADDRESS = 'tBURNXXXXXXXXXXXXXXXXXXXXXXXVZLroy';
+
+/**
+ * Whether a network label means regtest specifically, rather than the wider
+ * testnet family it shares an address prefix with.
+ *
+ * @param {string} network - Network label
+ * @returns {boolean} True for regtest
+ */
+function isRegtest(network) {
+  return network === 'regtest';
+}
+
+/**
  * Get burn address for an operation and network
  * @param {string} operationType - Operation type (e.g., 'ISSUE_ROOT')
- * @param {string} network - Network type ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+ * @param {string} network - Network type ('xna', 'xna-test', 'regtest', 'xna-pq', or 'xna-pq-test')
  * @returns {string} Burn address
  */
 function getBurnAddress(operationType, network) {
@@ -59,25 +83,30 @@ function getBurnAddress(operationType, network) {
     throw new Error(`Unknown operation type: ${operationType} for network: ${network}`);
   }
 
-  return address;
+  return isRegtest(network) ? REGTEST_GLOBAL_BURN_ADDRESS : address;
 }
 
 /**
  * Check if an address is a burn address
  * @param {string} address - Address to check
- * @param {string} network - Network type ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+ * @param {string} network - Network type ('xna', 'xna-test', 'regtest', 'xna-pq', or 'xna-pq-test')
  * @returns {boolean} True if it's a burn address
  */
 function isBurnAddress(address, network) {
   const family = resolveNetworkFamily(network);
   const addresses = family === 'mainnet' ? MAINNET_BURN_ADDRESSES : TESTNET_BURN_ADDRESSES;
+  if (isRegtest(network) && address === REGTEST_GLOBAL_BURN_ADDRESS) {
+    return true;
+  }
   return Object.values(addresses).includes(address);
 }
 
 module.exports = {
   MAINNET_BURN_ADDRESSES,
   TESTNET_BURN_ADDRESSES,
+  REGTEST_GLOBAL_BURN_ADDRESS,
   resolveNetworkFamily,
+  isRegtest,
   getBurnAddress,
   isBurnAddress
 };

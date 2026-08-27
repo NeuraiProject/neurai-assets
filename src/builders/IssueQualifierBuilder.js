@@ -129,35 +129,26 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     const changeAddress = await this.getChangeAddress();
 
     // 7. Estimate fee
-    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    const outputAddresses = [
+      burnInfo.address,
+      changeAddress,
+      { address: toAddress, assetName, kind: 'issue', hasIpfs },
+      ...(isSub ? [{ address: changeAddress, assetName: parentQualifierName }] : []),
+    ];
+    // 8-12. Fund the XNA side. The parent qualifier inputs count towards the
+    //       size estimate from the first round and are excluded from selection.
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: parentQualifierUTXOs,
+      exclude: parentQualifierUTXOs,
+      initialInputHint: 1
+    });
 
-    // 8. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 9. Select XNA UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 10. Recalculate fee with actual inputs (PQ-aware), including parent qualifier UTXOs
-    const actualFeeInputs = [...baseCurrencyUTXOs, ...parentQualifierUTXOs];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 11. Verify we have enough XNA
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 12. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 13. Build inputs
     const inputs = [];
@@ -190,8 +181,8 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Issue qualifier operation
@@ -230,12 +221,27 @@ class IssueQualifierBuilder extends BaseAssetTransactionBuilder {
         parentQualifier: isSub ? parsed.parent : null,
         parentQualifierUsed: parentQualifierName,
         operationType: isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
+          inputs,
+          { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.assetAmountToRaw(quantity, 0, 'quantity'),
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            rootChangeAddress: isSub ? changeAddress : undefined,
+            changeQuantityRaw: isSub && parentQualifierQuantity !== null
+              ? this.assetAmountToRaw(parentQualifierQuantity, 0, 'parent qualifier change')
+              : undefined
+          }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           isSub ? 'ISSUE_SUB_QUALIFIER' : 'ISSUE_QUALIFIER',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

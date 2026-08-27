@@ -75,28 +75,18 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
-    const outputAddresses = [burnInfo.address, changeAddress, toAddress];
-    const estimatedFee = await this.estimateFee(1, outputAddresses);
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
+    const outputAddresses = [
+      burnInfo.address,
+      changeAddress,
+      { address: toAddress, assetName, kind: 'issue', hasIpfs },
+      { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },
+    ];
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({ outputs: outputAddresses, burnSats });
 
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    const actualFee = await this.estimateFee(baseCurrencyUTXOs, outputAddresses);
-    const totalRequired = burnInfo.amount + actualFee;
-
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     const inputs = baseCurrencyUTXOs.map(utxo => ({
       txid: utxo.txid,
@@ -108,8 +98,8 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
     const outputs = [];
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     const issueOutput = OutputFormatter.formatIssueOutput({
@@ -137,12 +127,29 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
         assetName,
         ownerTokenName: `${assetName}!`,
         operationType: 'ISSUE_DEPIN',
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          'ISSUE_DEPIN',
+          inputs,
+          { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.assetAmountToRaw(quantity, 0, 'quantity'),
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            ownerTokenAddress: changeAddress,
+            reissuable,
+            // Canonical label, so create-transaction's mainnet DePIN guard
+            // actually runs: it treats any unknown value (including the alias
+            // 'mainnet') as testnet and would let a mainnet build through.
+            network: this.canonicalNetwork()
+          }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_DEPIN',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

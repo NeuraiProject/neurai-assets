@@ -11,6 +11,58 @@
 const { rpcErrorMessage } = require('../utils/rpcErrorMessage');
 const { InsufficientFundsError } = require('../errors');
 const { estimateTransactionVbytes } = require('../utils/feeSizing');
+const {
+  assetAmountToRaw,
+  xnaAmountToSats,
+  formatRawAsDecimal,
+  toProtocolInteger,
+  sumProtocolIntegers
+} = require('../utils/assetAmount');
+
+/**
+ * Identity of an unspent output. `getaddressutxos` reports `outputIndex`;
+ * builder-side inputs carry `vout`. Both name the same thing.
+ *
+ * @param {object} utxo - UTXO or input
+ * @returns {string} Stable outpoint key
+ */
+function outpointKey(utxo) {
+  const index = utxo.outputIndex !== undefined ? utxo.outputIndex : utxo.vout;
+  return `${utxo.txid}:${index}`;
+}
+
+/**
+ * Accept an exclusion list as a Set, an array of keys, or an array of
+ * UTXO-like objects, and return a Set of keys.
+ *
+ * @param {Set<string>|Array<string|object>|undefined} exclude - Outpoints to skip
+ * @returns {Set<string>} Excluded outpoint keys
+ */
+function toOutpointSet(exclude) {
+  if (!exclude) {
+    return new Set();
+  }
+  if (exclude instanceof Set) {
+    return exclude;
+  }
+  return new Set(
+    Array.from(exclude, entry => (typeof entry === 'string' ? entry : outpointKey(entry)))
+  );
+}
+
+/**
+ * Integer division rounding away from zero, for fee thresholds.
+ *
+ * @param {bigint} numerator - Dividend
+ * @param {bigint} denominator - Positive divisor
+ * @returns {bigint} Ceiling of the quotient
+ */
+function ceilDiv(numerator, denominator) {
+  if (numerator <= 0n) {
+    return numerator / denominator;
+  }
+  return (numerator + denominator - 1n) / denominator;
+}
 
 class UTXOSelector {
   /**
@@ -93,57 +145,101 @@ class UTXOSelector {
   }
 
   /**
+   * Sort UTXOs by value, largest first, without mutating the input.
+   *
+   * A bigint comparison is required: `b.satoshis - a.satoshis` throws once
+   * satoshis arrive as bigint and compares lexicographically once they arrive
+   * as strings, which is how a large-value UTXO ends up sorted as if it were
+   * small.
+   *
+   * @param {Array} utxos - UTXOs to sort
+   * @param {string} label - Field description for error messages
+   * @returns {Array} New array, sorted by descending value
+   */
+  sortByValueDesc(utxos, label = 'utxo.satoshis') {
+    return [...utxos].sort((a, b) => {
+      const left = toProtocolInteger(a.satoshis, label);
+      const right = toProtocolInteger(b.satoshis, label);
+      if (right > left) return 1;
+      if (right < left) return -1;
+      return 0;
+    });
+  }
+
+  /**
    * Select UTXOs for base currency (XNA)
    * Uses greedy algorithm: selects UTXOs until sum >= required amount
    *
+   * `options.exclude` is what keeps a second, incremental call from handing
+   * back an outpoint the caller already holds: without it this method
+   * re-queries the node, re-sorts from the largest value — which is normally
+   * the one the first call took — and returns it again, producing a
+   * transaction that spends the same outpoint twice.
+   *
    * @param {string[]} addresses - Wallet addresses
-   * @param {number} requiredAmount - Required amount in XNA
+   * @param {number|string} requiredAmount - Required amount in XNA (ignored when options.requiredSats is given)
    * @param {number} buffer - Safety buffer percentage (default: 0.1 = 10%)
-   * @returns {Promise<object>} { utxos, totalAmount }
+   * @param {object} [options]
+   * @param {bigint} [options.requiredSats] - Exact requirement in satoshis; preferred over requiredAmount
+   * @param {Set<string>|Array} [options.exclude] - Outpoints that must not be selected
+   * @returns {Promise<object>} { utxos, totalAmount, totalSats }
    * @throws {InsufficientFundsError} If not enough funds
    */
-  async selectBaseCurrencyUTXOs(addresses, requiredAmount, buffer = 0.1) {
+  async selectBaseCurrencyUTXOs(addresses, requiredAmount, buffer = 0.1, options = {}) {
     // Get all XNA UTXOs
     const allUTXOs = await this.getUTXOs(addresses, null);
 
     // Get mempool and filter
     const mempool = await this.getMempoolEntries(addresses);
-    const availableUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
+    const unspentUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
+
+    // Drop outpoints the caller already spends elsewhere in this transaction
+    const excluded = toOutpointSet(options.exclude);
+    const availableUTXOs = excluded.size === 0
+      ? unspentUTXOs
+      : unspentUTXOs.filter(utxo => !excluded.has(outpointKey(utxo)));
 
     // Sort by value (largest first) for efficiency
-    const sortedUTXOs = availableUTXOs.sort((a, b) => b.satoshis - a.satoshis);
+    const sortedUTXOs = this.sortByValueDesc(availableUTXOs);
 
-    // Add buffer to required amount
-    const requiredWithBuffer = requiredAmount * (1 + buffer);
+    // Requirement and buffer in integer satoshis. The buffer is applied to the
+    // integer, not to a float amount that is then re-scaled.
+    const requiredSats = options.requiredSats !== undefined
+      ? toProtocolInteger(options.requiredSats, 'requiredSats')
+      : xnaAmountToSats(requiredAmount, { label: 'required XNA', rounding: 'ceil' });
+    const bufferScale = 10000n;
+    const bufferFactor = BigInt(Math.round((1 + buffer) * Number(bufferScale)));
+    const requiredWithBufferSats = ceilDiv(requiredSats * bufferFactor, bufferScale);
 
     // Select UTXOs greedily
     const selected = [];
-    let totalSatoshis = 0;
-    const requiredSatoshis = Math.ceil(requiredWithBuffer * 100000000); // Convert XNA to satoshis
+    let totalSatoshis = 0n;
 
     for (const utxo of sortedUTXOs) {
       selected.push(utxo);
-      totalSatoshis += utxo.satoshis;
+      totalSatoshis += toProtocolInteger(utxo.satoshis, 'utxo.satoshis');
 
-      if (totalSatoshis >= requiredSatoshis) {
+      if (totalSatoshis >= requiredWithBufferSats) {
         break;
       }
     }
 
     // Check if we have enough
-    if (totalSatoshis < requiredSatoshis) {
-      const available = totalSatoshis / 100000000;
+    if (totalSatoshis < requiredWithBufferSats) {
+      const available = formatRawAsDecimal(totalSatoshis);
+      const required = formatRawAsDecimal(requiredSats);
       throw new InsufficientFundsError(
-        `Insufficient XNA balance. Required: ${requiredAmount.toFixed(8)} XNA (+ ${(buffer * 100).toFixed(0)}% buffer), ` +
-        `Available: ${available.toFixed(8)} XNA`,
-        requiredAmount,
-        available
+        `Insufficient XNA balance. Required: ${required} XNA (+ ${(buffer * 100).toFixed(0)}% buffer), ` +
+        `Available: ${available} XNA`,
+        Number(required),
+        Number(available)
       );
     }
 
     return {
       utxos: selected,
-      totalAmount: totalSatoshis / 100000000
+      totalAmount: Number(formatRawAsDecimal(totalSatoshis)),
+      totalSats: totalSatoshis
     };
   }
 
@@ -155,7 +251,7 @@ class UTXOSelector {
    * @returns {Promise<object>} { utxos, totalAmount }
    * @throws {InsufficientFundsError} If not enough asset balance
    */
-  async selectAssetUTXOs(addresses, assetName, requiredAmount) {
+  async selectAssetUTXOs(addresses, assetName, requiredAmount, options = {}) {
     if (!assetName) {
       throw new Error('Asset name is required');
     }
@@ -165,38 +261,51 @@ class UTXOSelector {
 
     // Get mempool and filter
     const mempool = await this.getMempoolEntries(addresses);
-    const availableUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
+    const unspentUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
+
+    const excluded = toOutpointSet(options.exclude);
+    const availableUTXOs = excluded.size === 0
+      ? unspentUTXOs
+      : unspentUTXOs.filter(utxo => !excluded.has(outpointKey(utxo)));
 
     // Sort by value (largest first)
-    const sortedUTXOs = availableUTXOs.sort((a, b) => b.satoshis - a.satoshis);
+    const sortedUTXOs = this.sortByValueDesc(availableUTXOs);
+
+    // Requirement as an exact protocol integer. `requiredRaw` is the path the
+    // canonical builders use: they have already summed the recipients in raw
+    // and must not round-trip that total through a display float.
+    const requiredRaw = options.requiredRaw !== undefined
+      ? toProtocolInteger(options.requiredRaw, 'requiredRaw')
+      : assetAmountToRaw(requiredAmount, undefined, { label: `${assetName} amount` });
 
     // Select UTXOs greedily
     const selected = [];
-    let totalSatoshis = 0;
-    const requiredSatoshis = Math.ceil(requiredAmount * 100000000); // Assuming 8 decimals
+    let totalSatoshis = 0n;
 
     for (const utxo of sortedUTXOs) {
       selected.push(utxo);
-      totalSatoshis += utxo.satoshis;
+      totalSatoshis += toProtocolInteger(utxo.satoshis, `${assetName} utxo.satoshis`);
 
-      if (totalSatoshis >= requiredSatoshis) {
+      if (totalSatoshis >= requiredRaw) {
         break;
       }
     }
 
     // Check if we have enough
-    if (totalSatoshis < requiredSatoshis) {
-      const available = totalSatoshis / 100000000;
+    if (totalSatoshis < requiredRaw) {
+      const available = formatRawAsDecimal(totalSatoshis);
+      const required = formatRawAsDecimal(requiredRaw);
       throw new InsufficientFundsError(
-        `Insufficient ${assetName} balance. Required: ${requiredAmount}, Available: ${available}`,
-        requiredAmount,
-        available
+        `Insufficient ${assetName} balance. Required: ${required}, Available: ${available}`,
+        Number(required),
+        Number(available)
       );
     }
 
     return {
       utxos: selected,
-      totalAmount: totalSatoshis / 100000000
+      totalAmount: Number(formatRawAsDecimal(totalSatoshis)),
+      totalRaw: totalSatoshis
     };
   }
 
@@ -208,26 +317,48 @@ class UTXOSelector {
    * @param {number} assetAmount - Required asset amount
    * @returns {Promise<object>} { xnaUTXOs, assetUTXOs, totalXNA, totalAsset }
    */
-  async selectMixedUTXOs(addresses, xnaAmount, assetName = null, assetAmount = 0) {
+  async selectMixedUTXOs(addresses, xnaAmount, assetName = null, assetAmount = 0, options = {}) {
     const result = {
       xnaUTXOs: [],
       assetUTXOs: [],
       totalXNA: 0,
-      totalAsset: 0
+      totalAsset: 0,
+      totalXNASats: 0n,
+      totalAssetRaw: 0n
     };
 
+    const wantsXna = options.requiredSats !== undefined
+      ? toProtocolInteger(options.requiredSats, 'requiredSats') > 0n
+      : xnaAmount > 0;
+
     // Select XNA UTXOs if needed
-    if (xnaAmount > 0) {
-      const xnaSelection = await this.selectBaseCurrencyUTXOs(addresses, xnaAmount);
+    if (wantsXna) {
+      const xnaSelection = await this.selectBaseCurrencyUTXOs(
+        addresses,
+        xnaAmount,
+        options.buffer !== undefined ? options.buffer : 0.1,
+        { exclude: options.exclude, requiredSats: options.requiredSats }
+      );
       result.xnaUTXOs = xnaSelection.utxos;
       result.totalXNA = xnaSelection.totalAmount;
+      result.totalXNASats = xnaSelection.totalSats;
     }
 
+    const wantsAsset = options.requiredRaw !== undefined
+      ? toProtocolInteger(options.requiredRaw, 'requiredRaw') > 0n
+      : assetAmount > 0;
+
     // Select asset UTXOs if needed
-    if (assetName && assetAmount > 0) {
-      const assetSelection = await this.selectAssetUTXOs(addresses, assetName, assetAmount);
+    if (assetName && wantsAsset) {
+      const assetSelection = await this.selectAssetUTXOs(
+        addresses,
+        assetName,
+        assetAmount,
+        { exclude: options.exclude, requiredRaw: options.requiredRaw }
+      );
       result.assetUTXOs = assetSelection.utxos;
       result.totalAsset = assetSelection.totalAmount;
+      result.totalAssetRaw = assetSelection.totalRaw;
     }
 
     return result;
@@ -240,12 +371,22 @@ class UTXOSelector {
    * @returns {Promise<number>} Total balance
    */
   async getBalance(addresses, assetName = null) {
+    return Number(formatRawAsDecimal(await this.getBalanceRaw(addresses, assetName)));
+  }
+
+  /**
+   * Get total balance for an asset as an exact protocol integer.
+   *
+   * @param {string[]} addresses - Wallet addresses
+   * @param {string|null} assetName - Asset name (null for XNA)
+   * @returns {Promise<bigint>} Total balance in 10^8-scaled units
+   */
+  async getBalanceRaw(addresses, assetName = null) {
     const utxos = await this.getUTXOs(addresses, assetName);
     const mempool = await this.getMempoolEntries(addresses);
     const availableUTXOs = this.filterMempoolSpentUTXOs(utxos, mempool);
 
-    const totalSatoshis = availableUTXOs.reduce((sum, utxo) => sum + utxo.satoshis, 0);
-    return totalSatoshis / 100000000;
+    return sumProtocolIntegers(availableUTXOs, 'satoshis', `${assetName || 'XNA'} utxo.satoshis`);
   }
 
   /**
@@ -285,12 +426,27 @@ class UTXOSelector {
    * @returns {number} Estimated fee in XNA
    */
   estimateFee(inputs, outputs, feeRate = 0.015) {
-    const sizeVbytes = this.estimateTransactionSize(inputs, outputs);
-    const sizeKB = sizeVbytes / 1000;
-    const fee = sizeKB * feeRate;
+    return Number(formatRawAsDecimal(this.estimateFeeSats(inputs, outputs, feeRate)));
+  }
 
-    // Round up to 8 decimals
-    return Math.ceil(fee * 100000000) / 100000000;
+  /**
+   * Estimate fee for a transaction, in exact satoshis.
+   *
+   * This is the form the builders account in: the fee has to be added to a
+   * burn and subtracted from an input total, and doing that in XNA floats is
+   * what produces one-satoshi drifts in the change output.
+   *
+   * @param {number|Array} inputs - Input count or array of UTXO-like descriptors
+   * @param {number|Array} outputs - Output count or array of address-like descriptors
+   * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
+   * @returns {bigint} Estimated fee in satoshis, rounded up
+   */
+  estimateFeeSats(inputs, outputs, feeRate = 0.015) {
+    const sizeVbytes = BigInt(this.estimateTransactionSize(inputs, outputs));
+    const feeRateSats = xnaAmountToSats(feeRate, { label: 'feeRate', rounding: 'ceil' });
+
+    // fee = vbytes / 1000 * feeRate, rounded up to the satoshi
+    return ceilDiv(sizeVbytes * feeRateSats, 1000n);
   }
 
   /**
@@ -314,5 +470,11 @@ class UTXOSelector {
     }
   }
 }
+
+// Shared with the builders so a transaction's outpoint bookkeeping uses one
+// definition of identity.
+UTXOSelector.outpointKey = outpointKey;
+UTXOSelector.toOutpointSet = toOutpointSet;
+UTXOSelector.ceilDiv = ceilDiv;
 
 module.exports = UTXOSelector;

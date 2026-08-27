@@ -133,37 +133,23 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      changeAddress, // owner token return goes to change address
-      toAddress,
+      { address: changeAddress, assetName: ownerTokenName, kind: 'owner' },
+      { address: toAddress, assetName, kind: 'reissue', hasIpfs: Boolean(newIpfs) },
     ];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    // Fund the XNA side. The owner-token input counts towards the size
+    // estimate from the first round and is excluded from XNA selection.
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: [ownerTokenUTXO],
+      exclude: [ownerTokenUTXO],
+      initialInputHint: 1
+    });
 
-    // 9. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 10. Select XNA UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 11. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
-    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 12. Verify we have enough XNA
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 13. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 14. Build inputs (XNA + owner token)
     const inputs = [];
@@ -194,8 +180,8 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Reissue operation
@@ -215,8 +201,36 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     // 16. Order outputs (protocol requirement)
     const orderedOutputs = this.outputOrderer.order(outputs);
 
-    // 17. Create raw transaction
-    const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
+    // 17. Canonical build — also the source of the raw transaction. The
+    // node's `createrawtransaction` has no units field for a reissue and
+    // assumes 0, so it rejects any asset with units > 0; the local codec
+    // encodes "keep the current units" (0xff) and emits the same outputs the
+    // node would (owner-token return included), so the RPC is not needed for
+    // this step.
+    const createTransactionBuild = await this.buildCreateTransactionBuild(
+      'REISSUE',
+      inputs,
+      { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+      {
+        toAddress,
+        assetName,
+        quantityRaw: this.assetAmountToRaw(quantity, units, 'quantity'),
+        // `units` is deliberately omitted: this library has no API to
+        // change an asset's units, so the honest statement is "keep the
+        // current ones", which create-transaction >= 0.8.0 encodes as
+        // 0xff. Echoing the value read from getassetdata would say "set
+        // units to N" instead, and a stale read — the asset reissued to a
+        // higher precision between the read and the broadcast — would ask
+        // the node to lower them, which it rejects with
+        // `unit must be larger than current unit selection`.
+        // The value is still used above, to validate that `quantity` fits
+        // the asset's precision.
+        reissuable: reissuable !== undefined ? reissuable : undefined,
+        ipfsHash: newIpfs || undefined,
+        ownerChangeAddress: isDepinAsset ? toAddress : changeAddress
+      }
+    );
+    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
 
     // 18. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
@@ -236,12 +250,14 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
         previousSupply: currentSupply,
         reissuableLocked: reissuable === false,
         operationType: 'REISSUE',
+        buildStrategy: 'local-builder',
+        createTransactionBuild,
         localRawBuild: await this.buildLocalRawBuild(
           'REISSUE',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

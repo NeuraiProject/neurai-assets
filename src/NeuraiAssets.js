@@ -48,6 +48,12 @@ class NeuraiAssets {
    *   built raw transactions. Omit to use the node's
    *   getblockchaininfo.asset_marker (falls back to 'rvn' on nodes that do
    *   not report it). Per-operation params.assetMarker overrides this.
+   * @param {('strict'|'legacy-fallback')} [config.assetMarkerPolicy] - What to
+   *   do when getblockchaininfo FAILS. 'legacy-fallback' (default in 1.x)
+   *   resolves 'rvn'; 'strict' propagates the error instead, because on a
+   *   post-NIP-040 chain a guessed 'rvn' builds a transaction the node
+   *   rejects. A node that simply predates the field still resolves 'rvn'
+   *   under both policies — that is an answer, not a failure.
    */
   constructor(rpc, config = {}) {
     if (!rpc || typeof rpc !== 'function') {
@@ -63,7 +69,8 @@ class NeuraiAssets {
       // NIP-040: documented since 1.4.0 but dropped here until 1.4.1, which
       // made the config-level override silently inoperative (per-operation
       // params.assetMarker was unaffected).
-      assetMarker: config.assetMarker
+      assetMarker: config.assetMarker,
+      assetMarkerPolicy: config.assetMarkerPolicy
     };
 
     // Initialize query interface
@@ -92,7 +99,10 @@ class NeuraiAssets {
       toAddress: params.toAddress || this.config.toAddress,
       // NIP-040: marker for the localRawBuild metadata. Undefined lets the
       // builder ask the node (getblockchaininfo.asset_marker).
-      assetMarker: params.assetMarker !== undefined ? params.assetMarker : this.config.assetMarker
+      assetMarker: params.assetMarker !== undefined ? params.assetMarker : this.config.assetMarker,
+      assetMarkerPolicy: params.assetMarkerPolicy !== undefined
+        ? params.assetMarkerPolicy
+        : this.config.assetMarkerPolicy
     };
   }
 

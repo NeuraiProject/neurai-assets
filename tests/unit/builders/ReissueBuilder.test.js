@@ -1,23 +1,27 @@
 const { expect } = require('chai');
 const { bech32m } = require('bech32');
 const ReissueBuilder = require('../../../src/builders/ReissueBuilder');
+const { parseUnsignedOutputs, assetPayloads } = require('../../fixtures/txParser');
 
 const TEST_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
 
 /**
  * Build an in-memory RPC stub for ReissueBuilder tests.
  *
+ * `createrawtransaction` is deliberately NOT handled: since 1.5.0 the reissue
+ * builders produce the raw transaction locally (the node RPC cannot express
+ * "keep the current units" and rejects any asset with units > 0), so a call
+ * to it would be a regression and trips the default throw.
+ *
  * @param {object} options
  * @param {object} options.assetData - what `getassetdata <name>` returns
  * @param {string} options.assetName - the asset being reissued
  * @param {number} options.ownerUtxoSatoshis - satoshis on the owner-token UTXO
  *   (chain encodes asset balances in 10^8-sats, so 100000000 = 1 owner token)
- * @returns {{ rpc: Function, getCapturedOutputs: () => any }}
+ * @returns {Function} rpc stub
  */
 function buildRpc({ assetData, assetName, ownerUtxoSatoshis = 100000000 }) {
-  let captured;
-
-  const rpc = async (method, params = []) => {
+  return async (method, params = []) => {
     switch (method) {
       case 'getassetdata':
         if (params[0] === assetName) return assetData;
@@ -53,33 +57,28 @@ function buildRpc({ assetData, assetName, ownerUtxoSatoshis = 100000000 }) {
       case 'estimatesmartfee':
         return { feerate: 0.015 };
 
-      case 'createrawtransaction':
-        captured = params[1];
-        return 'deadbeef';
+      case 'getblockchaininfo':
+        return { asset_marker: 'xna' };
 
       default:
         throw new Error(`Unexpected RPC method: ${method} (${JSON.stringify(params)})`);
     }
   };
-
-  return { rpc, getCapturedOutputs: () => captured };
 }
 
-function findReissueOutput(capturedOutputs) {
-  return capturedOutputs.find(output => {
-    const value = Object.values(output)[0];
-    return value && typeof value === 'object' && value.reissue;
-  });
+/** The reissue ('r') payload the chain will parse out of the built rawTx. */
+function reissuePayloadOf(result, assetName) {
+  const payloads = assetPayloads(parseUnsignedOutputs(result.rawTx));
+  return payloads.find(p => p.type === 'r' && p.assetName === assetName);
 }
 
 describe('ReissueBuilder', () => {
   // Regression for the v1.2.2 bug: `toSatoshis` was hardcoded to ×10^8, so
   // reissuing 1 token of a units=0 asset asked the daemon to mint 100,000,000.
-  // The chain parses asset_quantity with AmountFromValue (which already does
-  // the ×10^8 scaling), so the JSON value must be the user-facing display
-  // amount, not pre-multiplied.
+  // The reissue payload carries a protocol-raw (10^8-scaled) u64, so 1 token
+  // must encode exactly 10^8 — a double-scaled build would encode 10^16.
   it('should mint exactly N tokens for a units=0 asset (no ×10^8 inflation)', async () => {
-    const { rpc, getCapturedOutputs } = buildRpc({
+    const rpc = buildRpc({
       assetName: 'ROOT',
       assetData: { name: 'ROOT', amount: 10, units: 0, reissuable: 1 },
     });
@@ -93,18 +92,16 @@ describe('ReissueBuilder', () => {
       quantity: 1,
     });
 
-    await builder.build();
+    const result = await builder.build();
 
-    const reissueOutput = findReissueOutput(getCapturedOutputs());
-    expect(reissueOutput, 'createrawtransaction must include a reissue output').to.not.equal(undefined);
-    expect(reissueOutput[TEST_ADDRESS].reissue).to.deep.include({
-      asset_name: 'ROOT',
-      asset_quantity: 1, // not 100000000 — that was the v1.2.2 bug
-    });
+    expect(result.buildStrategy).to.equal('local-builder');
+    const reissue = reissuePayloadOf(result, 'ROOT');
+    expect(reissue, 'rawTx must include a reissue payload').to.not.equal(undefined);
+    expect(reissue.amountRaw).to.equal(100000000n); // 1 token, not 10^16
   });
 
   it('should send the user-facing display value for a units=8 asset', async () => {
-    const { rpc, getCapturedOutputs } = buildRpc({
+    const rpc = buildRpc({
       assetName: 'PRECISE',
       assetData: { name: 'PRECISE', amount: 10, units: 8, reissuable: 1 },
     });
@@ -118,17 +115,14 @@ describe('ReissueBuilder', () => {
       quantity: 1.5,
     });
 
-    await builder.build();
+    const result = await builder.build();
 
-    const reissueOutput = findReissueOutput(getCapturedOutputs());
-    expect(reissueOutput[TEST_ADDRESS].reissue).to.deep.include({
-      asset_name: 'PRECISE',
-      asset_quantity: 1.5,
-    });
+    const reissue = reissuePayloadOf(result, 'PRECISE');
+    expect(reissue.amountRaw).to.equal(150000000n); // 1.5 tokens
   });
 
   it('should send the user-facing display value for an intermediate-units asset', async () => {
-    const { rpc, getCapturedOutputs } = buildRpc({
+    const rpc = buildRpc({
       assetName: 'MID',
       assetData: { name: 'MID', amount: 10, units: 2, reissuable: 1 },
     });
@@ -142,17 +136,15 @@ describe('ReissueBuilder', () => {
       quantity: 1000,
     });
 
-    await builder.build();
+    const result = await builder.build();
 
-    const reissueOutput = findReissueOutput(getCapturedOutputs());
-    expect(reissueOutput[TEST_ADDRESS].reissue).to.deep.include({
-      asset_name: 'MID',
-      asset_quantity: 1000, // not 100000 (×10^units) and not 100000000000 (×10^8)
-    });
+    const reissue = reissuePayloadOf(result, 'MID');
+    // 1000 tokens = 10^11 raw — not ×10^units on top (10^13), not ×10^8 twice
+    expect(reissue.amountRaw).to.equal(100000000000n);
   });
 
   it('should reject a non-reissuable asset', async () => {
-    const { rpc } = buildRpc({
+    const rpc = buildRpc({
       assetName: 'LOCKED',
       assetData: { name: 'LOCKED', amount: 10, units: 0, reissuable: 0 },
     });
@@ -177,7 +169,7 @@ describe('ReissueBuilder', () => {
   });
 
   it('should reject quantity <= 0', async () => {
-    const { rpc } = buildRpc({
+    const rpc = buildRpc({
       assetName: 'ROOT',
       assetData: { name: 'ROOT', amount: 10, units: 0, reissuable: 1 },
     });

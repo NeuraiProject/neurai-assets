@@ -107,34 +107,20 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     // 6. Estimate fee
     // Outputs: burn + XNA change + tag/untag operation (sent to changeAddress)
     const outputAddresses = [burnInfo.address, changeAddress, changeAddress];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    // 7-11. Fund the XNA side. The qualifier inputs count towards the size
+    //       estimate from the first round and are excluded from XNA selection.
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: qualifierUTXOs,
+      exclude: qualifierUTXOs,
+      initialInputHint: 1
+    });
 
-    // 7. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 8. Select XNA UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 9. Recalculate fee with actual inputs (PQ-aware), including qualifier UTXOs
-    const actualFeeInputs = [...baseCurrencyUTXOs, ...qualifierUTXOs];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 10. Verify we have enough XNA
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 11. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 12. Build inputs (XNA + qualifier asset)
     const inputs = [];
@@ -166,8 +152,8 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Tag/Untag operation. The node creates the qualifier change output
@@ -208,12 +194,27 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
         targetAddresses,
         addressCount,
         operationType: isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
+          inputs,
+          { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+          {
+            qualifierName,
+            targetAddresses,
+            qualifierChangeAddress: changeAddress,
+            qualifierChangeAmountRaw: this.assetAmountToRaw(
+              qualifierQuantity,
+              0,
+              'qualifier change'
+            )
+          }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           isUntag ? 'UNTAG_ADDRESSES' : 'TAG_ADDRESSES',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             qualifierName,
             targetAddresses,

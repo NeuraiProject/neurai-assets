@@ -123,34 +123,20 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
       changeAddress, // owner token return goes to change address
       toAddress,
     ];
-    const estimatedFee = await this.estimateFee(2, outputAddresses);
+    // Fund the XNA side. The owner-token input counts towards the size
+    // estimate from the first round and is excluded from XNA selection.
+    const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: [ownerTokenUTXO],
+      exclude: [ownerTokenUTXO],
+      initialInputHint: 1
+    });
 
-    // 8. Calculate total XNA needed
-    const totalXNANeeded = burnInfo.amount + estimatedFee;
-
-    // 9. Select XNA UTXOs
-    const utxoSelection = await this.selectUTXOs(totalXNANeeded, null, 0);
-    const baseCurrencyUTXOs = utxoSelection.xnaUTXOs;
-    const totalXNAInput = utxoSelection.totalXNA;
-
-    // 10. Recalculate fee with actual inputs (PQ-aware), including owner token UTXO
-    const actualFeeInputs = [...baseCurrencyUTXOs, ownerTokenUTXO];
-    const actualFee = await this.estimateFee(actualFeeInputs, outputAddresses);
-
-    // 11. Verify we have enough XNA
-    const totalRequired = burnInfo.amount + actualFee;
-    if (totalXNAInput < totalRequired) {
-      const additionalNeeded = totalRequired - totalXNAInput + 0.001;
-      const additionalSelection = await this.selectUTXOs(additionalNeeded, null, 0);
-      baseCurrencyUTXOs.push(...additionalSelection.xnaUTXOs);
-    }
-
-    // 12. Calculate XNA change
-    const finalTotalInput = baseCurrencyUTXOs.reduce(
-      (sum, utxo) => sum + utxo.satoshis / 100000000,
-      0
-    );
-    const xnaChange = finalTotalInput - burnInfo.amount - actualFee;
+    const baseCurrencyUTXOs = funding.utxos;
+    const actualFee = this.satsToDisplay(funding.feeSats);
+    const xnaChangeSats = funding.changeSats;
 
     // 13. Build inputs (XNA + owner token)
     const inputs = [];
@@ -180,8 +166,8 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     // Second: XNA change (if any)
-    if (xnaChange > 0.00000001) {
-      outputs.push({ [changeAddress]: parseFloat(xnaChange.toFixed(8)) });
+    if (xnaChangeSats > 0n) {
+      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
 
     // Last: Issue restricted operation
@@ -220,12 +206,27 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
         verifierString,
         requiredQualifiers,
         operationType: 'ISSUE_RESTRICTED',
+        createTransactionBuild: await this.buildCreateTransactionBuild(
+          'ISSUE_RESTRICTED',
+          inputs,
+          { burnAddress: burnInfo.address, burnSats, changeAddress, changeSats: xnaChangeSats },
+          {
+            toAddress,
+            assetName,
+            quantityRaw: this.assetAmountToRaw(quantity, units, 'quantity'),
+            verifierString,
+            units,
+            reissuable,
+            ipfsHash: hasIpfs ? ipfsHash : undefined,
+            ownerChangeAddress: changeAddress
+          }
+        ),
         localRawBuild: await this.buildLocalRawBuild(
           'ISSUE_RESTRICTED',
           inputs,
           burnInfo,
           changeAddress,
-          xnaChange > 0.00000001 ? parseFloat(xnaChange.toFixed(8)) : null,
+          xnaChangeSats > 0n ? this.satsToDisplay(xnaChangeSats) : null,
           {
             toAddress,
             assetName,

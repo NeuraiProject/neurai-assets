@@ -484,17 +484,141 @@ All creation/reissuance operations return an object with this structure:
 
 ```javascript
 {
-  rawTx: 'hex string',           // Unsigned transaction (to sign with wallet)
+  rawTx: 'hex string',           // Unsigned transaction built by the node (to sign with wallet)
   utxos: [...],                  // UTXOs selected for the operation
   inputs: [...],                  // Transaction inputs
-  outputs: [...],                 // Ordered outputs
+  outputs: [...],                 // Ordered outputs (DISPLAY amounts, for createrawtransaction)
   fee: 0.001,                     // Fee in XNA
   burnAmount: 1000,               // Burned amount in XNA
   assetName: 'MYTOKEN',           // Operation-specific fields vary by builder
   ownerTokenName: 'MYTOKEN!',
-  operationType: 'ISSUE_ROOT'
+  operationType: 'ISSUE_ROOT',
+  createTransactionBuild: { ... } // Build it yourself, offline — see below
 }
 ```
+
+## Building offline with `createTransactionBuild` (1.5.0+)
+
+`rawTx` above is built by the node through `createrawtransaction`. To build the
+same transaction **locally**, pass `result.createTransactionBuild` straight to
+`@neuraiproject/neurai-create-transaction`:
+
+```javascript
+import { createFromOperation } from '@neuraiproject/neurai-create-transaction';
+
+const result = await assets.transferAsset({
+  assetName: 'MYTOKEN',
+  recipients: [{ address: 'tRecipient...', amount: 4.35 }]
+});
+
+const built = createFromOperation(result.createTransactionBuild);
+// built.rawTx — sign it with @neuraiproject/neurai-sign-transaction
+```
+
+Nothing has to be renamed, rescaled or reinterpreted in between. In particular
+you do **not** need to:
+
+- map the operation type — a transfer already arrives as `STANDARD_TRANSFER` or
+  `TRANSFER_DEPIN`, the discriminants the serializer accepts;
+- merge recipients, asset change and the DePIN owner return into one list (the
+  serializer emits the `&NAME!` escort itself; listing it again would produce
+  two owner outputs);
+- convert display amounts to protocol integers;
+- add or correct `assetMarker`.
+
+### Display amounts vs raw amounts
+
+The library speaks two representations, deliberately kept apart:
+
+| Where | Representation | Why |
+| --- | --- | --- |
+| Your call (`quantity`, `recipients[].amount`) | Display (`4.35`) | What a user types |
+| `result.outputs` (RPC envelope) | Display (`4.35`) | `createrawtransaction` scales it itself |
+| `result.createTransactionBuild` (`*Raw`, `*Sats`) | `bigint` (`435000000n`) | What the chain encodes |
+
+The asset payload scale is always `10^8`, **independently of the asset's
+`units`**: `units` limits divisibility and presentation, it is never a
+multiplier. A quantity of `1.25` reaches the chain as `125000000n` whether the
+asset has `units=2` or `units=8`.
+
+Conversion goes through text rather than `Math.round(value * 1e8)`. That
+multiplication is fine for ordinary magnitudes — `4.35 * 1e8` is
+`434999999.99999994`, but `Math.round` recovers `435000000` — and it fails
+silently in exactly two places:
+
+- **more than eight decimals** are rounded away instead of rejected, so an
+  amount can vanish (`1e-9` → `0`) or shift (`1.123456789` → `112345679`);
+- **past `Number.MAX_SAFE_INTEGER`** the scaled product drops bits:
+  `184467440.73709551` → `18446744073709552`, one unit off.
+
+Both are reachable with values a wallet can hold. Here, an amount is rejected
+rather than silently truncated when it has more than eight decimals, when the
+asset's `units` cannot represent it, or when it exceeds the consensus ceiling
+`MAX_MONEY` (`21000000000` units — the node's `MoneyRange`).
+
+### Large amounts: pass a string
+
+Above `MAX_SAFE_INTEGER / 1e8` (~`90071992.55`) a JavaScript `number` can no
+longer name every 8-decimal value, so a **fractional** one is refused there and
+the error names the string to use instead:
+
+```javascript
+await assets.createRootAsset({ assetName: 'BIG', quantity: 100000000.5, units: 1 });
+// InvalidAmountError: ... pass it as a decimal string ("100000000.5") instead.
+
+await assets.createRootAsset({ assetName: 'BIG', quantity: '100000000.5', units: 1 });
+// works
+```
+
+A **safe integer** is still accepted however large it scales, so the documented
+maximum supply `21000000000` keeps working as a number. Strings are exempt from
+this precision guard — they carried their own digits — but not from any other
+rule: sign, decimals, `units` divisibility and `MAX_MONEY` apply equally.
+
+### Migration 1.4.x → 1.5.x → 2.0
+
+| | 1.4.x | 1.5.x | 2.0 |
+| --- | --- | --- | --- |
+| `localRawBuild` | only option | present, **deprecated** | removed |
+| `createTransactionBuild` | — | present, canonical | only option |
+| Transfers via `createFromOperation` | rejected (`TRANSFER` is not a discriminant) | work | work |
+| `*Raw` fields | display values | protocol integers | protocol integers |
+| `toSatoshis(amount, units)` | returns the display amount | unchanged, deprecated | removed |
+
+`localRawBuild` keeps its exact 1.4.x shape through the whole 1.x line, so no
+consumer has to move on this release. New integrations should read
+`createTransactionBuild` only.
+
+### Serializer version
+
+The canonical contract needs `@neuraiproject/neurai-create-transaction`
+**>= 0.8.0**. Two of its fixes are load-bearing here:
+
+- global `FREEZE_ASSET` / `UNFREEZE_ASSET` encode the restriction flag as
+  `1`/`0` (0.7.0 emitted `3`/`2`, which the node rejected with
+  `bad-txns-null-data-flag-must-be-0-or-1`, so those two discriminants could
+  not reach a mempool);
+- a reissue that omits `units` encodes "keep the current units" (`0xff`), which
+  is what this library relies on — see below.
+
+### Reissue never changes an asset's units
+
+There is no API here to change the precision of an existing asset, so a reissue
+build deliberately **omits** `units`, which the serializer encodes as `0xff`
+("keep"). Echoing the value read from `getassetdata` would instead say "set
+units to N", and a stale read — the asset reissued to a higher precision
+between the read and the broadcast — would ask the node to lower them, which it
+rejects with `unit must be larger than current unit selection`.
+
+The value read from the chain is still used, to check that the requested
+`quantity` fits the asset's precision.
+
+One consequence worth knowing: the **node-built** `rawTx` cannot reissue an
+asset whose `units` are above zero at all. `createrawtransaction`'s `reissue`
+object has no field for units and the node fills in `0`, so it refuses. That is
+a limitation of the RPC interface, not of the operation — build those offline
+with `createFromOperation(result.createTransactionBuild)`. The error message
+says so when you hit it.
 
 ## Owner Tokens - IMPORTANT
 
@@ -544,17 +668,42 @@ Ravencoin-inherited `rvn` to `xna` at an activation height per network
 
 - Transactions built **through the node** (`createrawtransaction`) need
   nothing: the node stamps the marker itself.
-- The `localRawBuild` metadata (consumed by
-  `@neuraiproject/neurai-create-transaction createFromOperation`, >= 0.7.0)
-  now carries `params.assetMarker`. Builders resolve it once per build:
+- Locally built transactions carry `params.assetMarker` in both
+  `createTransactionBuild` and the deprecated `localRawBuild`. Builders
+  resolve it **once per build**:
   1. `params.assetMarker` / `config.assetMarker` if you set it (`'rvn'` |
      `'xna'` — offline builds or tests);
   2. otherwise the node's `getblockchaininfo.asset_marker` (node commit
      `347362b` or later);
-  3. `'rvn'` when the node predates that field or the call fails — which
-     matches what such a node enforces.
+  3. `'rvn'` when the node predates that field — which matches what such a
+     node enforces.
 
 No height tables and no network inference: the node (or you) decides.
+
+### Failure policy (`assetMarkerPolicy`, 1.5.0+)
+
+Step 3 above covers a node that *answers* without the field. A node that does
+not answer at all is a different situation, and `assetMarkerPolicy` decides it:
+
+```javascript
+const assets = new NeuraiAssets(rpc, {
+  network: 'xna-test',
+  addresses: [...],
+  assetMarkerPolicy: 'strict'   // default: 'legacy-fallback'
+});
+```
+
+| Policy | `getblockchaininfo` fails | Field absent/null | Unknown value |
+| --- | --- | --- | --- |
+| `legacy-fallback` (default in 1.x) | resolves `'rvn'` | resolves `'rvn'` | throws |
+| `strict` | **throws** | resolves `'rvn'` | throws |
+
+Use `strict` in a connected wallet on a post-NIP-040 chain: guessing `'rvn'`
+there builds a transaction the node rejects with
+`bad-txns-legacy-asset-marker-after-nip040`, so "the node did not answer" must
+not silently become "the node said rvn". The rejection propagates out of the
+build — you never receive a partial result — and the node is queried only once,
+whether the query succeeds or fails.
 
 ## Validations
 
@@ -744,11 +893,15 @@ are `xna` and `xna-test`; `xna-pq` and `xna-pq-test` remain available as compati
 
 ## Fee estimation (PQ-aware)
 
-Asset transactions are usually built with one or two XNA inputs plus, depending on the operation, an owner-token or qualifier UTXO. The library estimates the fee twice per build: a rough pre-estimate to size the initial XNA selection, and a final estimate once the actual UTXOs are known.
+Asset transactions are usually built with one or two XNA inputs plus, depending on the operation, an owner-token or qualifier UTXO. Since `1.5.0` the XNA side is funded by a loop that selects inputs, recomputes the fee from the *real* (PQ-aware) descriptors of the full input set, and repeats until the funds cover burn + fee. Every round excludes the outpoints it already holds, so a transaction never spends the same outpoint twice and the fee always accounts for every input it pays for.
 
-Both estimates share a single `estimatesmartfee` lookup. The fee rate is stable for the lifetime of one build, so it is fetched on the first `estimateFee` call and cached on the builder instance for the second — half as many RPC round trips as before `1.3.1`.
+Running out of funds raises `InsufficientFundsError` rather than returning an underfunded build. That includes a case worth knowing about: each PQ input costs about `0.0147 XNA` in fee, so a UTXO worth less than that makes the shortfall *worse*, and a wallet fragmented into such pieces cannot fund a PQ transaction at all.
 
-Both estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) and distinguish PQ AuthScript inputs/outputs from legacy P2PKH ones. PQ inputs spend ~977 vbytes vs ~148 for legacy — without this distinction, transactions built from PQ addresses fall under the node's `min relay fee` and are rejected with `code -26: min relay fee not met`.
+All estimates share a single `estimatesmartfee` lookup. The fee rate is stable for the lifetime of one build, so it is fetched on the first estimate and cached on the builder instance.
+
+Estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) and distinguish PQ AuthScript inputs/outputs from legacy P2PKH ones. PQ inputs spend ~977 vbytes vs ~148 for legacy — without this distinction, transactions built from PQ addresses fall under the node's `min relay fee` and are rejected with `code -26: min relay fee not met`.
+
+Outputs that carry an asset payload are sized as such, not as bare P2PKH outputs. An asset output is `<destination> OP_XNA_ASSET <pushdata payload> OP_DROP`, which adds roughly 20-60 bytes; ignoring that under-counts a transaction by a few percent, and that is enough to fall below the floor whenever the node's fee rate sits close to its minimum relay fee.
 
 You should not need to call these helpers directly; they are wired into every builder. They are documented here so you can audit the fee math or use the same constants if you compose transactions outside the standard builder flow.
 
@@ -771,6 +924,12 @@ estimateInputVbytes({ script: '5120…' });        // 977
 estimateInputVbytes({ address: 'nq1…' });        // 977
 estimateInputVbytes({ address: 'mgRYHdMq…' });   // 148
 estimateOutputBytes('tnq1…');                    // 43
+
+// Asset outputs declare their payload: kind is 'transfer' (default),
+// 'owner', 'issue' or 'reissue'.
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX' });                   // 55
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX!', kind: 'owner' });   // 48
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX', kind: 'issue' });    // 58
 
 const vbytes = estimateTransactionVbytes(
   [{ script: '5120…' }, { address: 'mgRYHdMq…' }],   // 1 PQ + 1 legacy input
