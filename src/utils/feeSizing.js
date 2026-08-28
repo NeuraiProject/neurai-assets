@@ -83,7 +83,12 @@ function assetPayloadBytes(descriptor) {
     return 0;
   }
 
-  const nameLength = Buffer.byteLength(String(descriptor.assetName), 'ascii');
+  // One byte per character, matching how the payload encodes the name
+  // (`serializeString` -> `asciiBytes`, which writes a single byte per char).
+  // Node's byte-length helper would be equivalent here, but it hangs off a
+  // global that browsers do not have: using it broke the extension bundle with
+  // "Buffer is not defined", and this library does much of its work there.
+  const nameLength = String(descriptor.assetName).length;
   const kind = descriptor.kind || 'transfer';
 
   // marker(3) + type(1) + CompactSize name length(1) + name

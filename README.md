@@ -613,12 +613,26 @@ rejects with `unit must be larger than current unit selection`.
 The value read from the chain is still used, to check that the requested
 `quantity` fits the asset's precision.
 
-One consequence worth knowing: the **node-built** `rawTx` cannot reissue an
-asset whose `units` are above zero at all. `createrawtransaction`'s `reissue`
-object has no field for units and the node fills in `0`, so it refuses. That is
-a limitation of the RPC interface, not of the operation — build those offline
-with `createFromOperation(result.createTransactionBuild)`. The error message
-says so when you hit it.
+### Reissue is built locally
+
+`createrawtransaction`'s `reissue` object has no field for units, so the node
+fills in `0` and refuses any asset whose units are above zero
+(`unit must be larger than current unit selection`). Since 1.5.0 the two
+reissue operations therefore skip that RPC and build their `rawTx` with
+`createFromOperation`, which can say "keep the current units". They report
+`buildStrategy: 'local-builder'`; every other operation still reports
+`'rpc-node'`.
+
+This is why `@neuraiproject/neurai-create-transaction` is a runtime
+**dependency**, not just a dev one.
+
+One consequence to know about: on the local path `result.outputs` and `rawTx`
+describe the same operation but not the same output list. The node
+auto-generates the owner-token return while processing a reissue entry, so the
+RPC envelope omits it, while the locally built transaction carries it
+explicitly — three entries in `outputs` against four vouts in `rawTx`. Both are
+valid; parse `rawTx` when you need the outputs the chain will see, and do not
+index `outputs` against its vouts.
 
 ## Owner Tokens - IMPORTANT
 

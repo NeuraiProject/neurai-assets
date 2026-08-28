@@ -540,3 +540,72 @@ describe('reissue keeps the asset units (create-transaction 0.8.0)', () => {
     expect(issue.slice(-8, -6)).to.equal('02');
   });
 });
+
+describe('reissue builds locally (1.5.0)', () => {
+  // The node's createrawtransaction has no units field for a reissue and fills
+  // in 0, so it refuses any asset with units > 0. Assets therefore builds these
+  // with createFromOperation instead — which also means the RPC output
+  // envelope and the raw transaction stop describing the same output list.
+  function reissueWallet(units) {
+    return wallet({
+      assetMap: { ROOTX: { amount: 1000, units, reissuable: 1 } },
+      ownerUtxos: [ownerUtxo('ROOTX!')]
+    });
+  }
+
+  it('reports buildStrategy "local-builder" and never calls createrawtransaction', async () => {
+    const calls = [];
+    const rpc = createAssetRpc({
+      assetMarker: 'xna',
+      calls,
+      assetMap: { ROOTX: { amount: 1000, units: 2, reissuable: 1 } },
+      xnaUtxos: [{ txid: 'a1'.repeat(32), outputIndex: 0, address: ADDR[0], satoshis: 500000 * 1e8 }],
+      ownerUtxos: [ownerUtxo('ROOTX!')]
+    });
+
+    const result = await assets(rpc).reissueAsset({ assetName: 'ROOTX', quantity: 4.35 });
+
+    expect(result.buildStrategy).to.equal('local-builder');
+    expect(calls).to.not.include('createrawtransaction');
+    expect(result.rawTx).to.match(/^[0-9a-f]+$/);
+  });
+
+  it('builds a units=2 reissue that the RPC path could not', async () => {
+    // With units > 0 the node would answer
+    // `unit must be larger than current unit selection`.
+    const result = await assets(reissueWallet(2)).reissueAsset({ assetName: 'ROOTX', quantity: 4.35 });
+    const payloads = assetPayloads(parseUnsignedOutputs(result.rawTx));
+    const reissue = payloads.find(p => p.type === 'r');
+    expect(reissue.assetName).to.equal('ROOTX');
+    expect(reissue.amountRaw).to.equal(435000000n);
+  });
+
+  it('emits the owner escort in rawTx, which the RPC envelope omits', async () => {
+    // The divergence documented on NeuraiAssetsBuildResult.outputs: the node
+    // would have generated the owner return itself, so the envelope has one
+    // entry fewer than the transaction actually has vouts.
+    const result = await assets(reissueWallet(2)).reissueAsset({ assetName: 'ROOTX', quantity: 4.35 });
+    const vouts = parseUnsignedOutputs(result.rawTx);
+
+    expect(result.outputs).to.have.length(3);
+    expect(vouts).to.have.length(4);
+
+    const owners = assetPayloads(vouts).filter(p => p.assetName === 'ROOTX!');
+    expect(owners, 'rawTx must carry exactly one owner escort').to.have.length(1);
+  });
+
+  it('keeps burn and change metadata correct despite that divergence', async () => {
+    const result = await assets(reissueWallet(2)).reissueAsset({ assetName: 'ROOTX', quantity: 4.35 });
+    expect(result.burnAmount).to.equal(200);
+    expect(result.burnAddress).to.be.a('string');
+    expect(result.changeAddress).to.equal(ADDR[0]);
+    expect(result.changeAmount).to.be.a('number');
+  });
+
+  it('leaves the other operations on the RPC path', async () => {
+    const issued = await assets(wallet()).createRootAsset({
+      assetName: 'ROOTX', quantity: 10, units: 0
+    });
+    expect(issued.buildStrategy).to.equal('rpc-node');
+  });
+});

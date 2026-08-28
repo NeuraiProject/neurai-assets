@@ -278,6 +278,17 @@ export interface NeuraiAssetsBuildResult {
   /** @deprecated Since 1.5.0; removed in 2.0.0. See {@link LocalRawBuild}. */
   localRawBuild?: LocalRawBuild;
   inputs: BuildInput[];
+  /**
+   * The `createrawtransaction` output envelope, in display amounts.
+   *
+   * Do NOT index these against `rawTx`'s vouts. They match on the `'rpc-node'`
+   * path, but not on `'local-builder'` (the reissue operations since 1.5.0):
+   * the node auto-generates the owner-token return while processing a reissue
+   * entry, so this envelope omits it, whereas the locally built `rawTx`
+   * carries it explicitly — three entries here against four vouts there.
+   * Both are valid; they are simply two descriptions of the same operation.
+   * Parse `rawTx` when you need the outputs the chain will see.
+   */
   outputs: Array<Record<string, unknown>>;
   utxos?: unknown[];
   assetData?: Record<string, unknown>;
