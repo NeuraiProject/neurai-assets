@@ -6310,11 +6310,14 @@ function requireUTXOSelector () {
 	   * @throws {InsufficientFundsError} If not enough funds
 	   */
 	  async selectBaseCurrencyUTXOs(addresses, requiredAmount, buffer = 0.1, options = {}) {
-	    // Get all XNA UTXOs
-	    const allUTXOs = await this.getUTXOs(addresses, null);
-
-	    // Get mempool and filter
-	    const mempool = await this.getMempoolEntries(addresses);
+	    // Both reads describe the same addresses and neither feeds the other: the
+	    // mempool result only filters the UTXO result afterwards. Awaiting them in
+	    // sequence spent one extra network round trip per selection, which on a
+	    // remote RPC proxy is most of the time a wallet spends building anything.
+	    const [allUTXOs, mempool] = await Promise.all([
+	      this.getUTXOs(addresses, null),
+	      this.getMempoolEntries(addresses)
+	    ]);
 	    const unspentUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
 
 	    // Drop outpoints the caller already spends elsewhere in this transaction
@@ -6380,11 +6383,14 @@ function requireUTXOSelector () {
 	      throw new Error('Asset name is required');
 	    }
 
-	    // Get all asset UTXOs
-	    const allUTXOs = await this.getUTXOs(addresses, assetName);
-
-	    // Get mempool and filter
-	    const mempool = await this.getMempoolEntries(addresses);
+	    // Both reads describe the same addresses and neither feeds the other: the
+	    // mempool result only filters the UTXO result afterwards. Awaiting them in
+	    // sequence spent one extra network round trip per selection, which on a
+	    // remote RPC proxy is most of the time a wallet spends building anything.
+	    const [allUTXOs, mempool] = await Promise.all([
+	      this.getUTXOs(addresses, assetName),
+	      this.getMempoolEntries(addresses)
+	    ]);
 	    const unspentUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
 
 	    const excluded = toOutpointSet(options.exclude);
@@ -6506,8 +6512,10 @@ function requireUTXOSelector () {
 	   * @returns {Promise<bigint>} Total balance in 10^8-scaled units
 	   */
 	  async getBalanceRaw(addresses, assetName = null) {
-	    const utxos = await this.getUTXOs(addresses, assetName);
-	    const mempool = await this.getMempoolEntries(addresses);
+	    const [utxos, mempool] = await Promise.all([
+	      this.getUTXOs(addresses, assetName),
+	      this.getMempoolEntries(addresses)
+	    ]);
 	    const availableUTXOs = this.filterMempoolSpentUTXOs(utxos, mempool);
 
 	    return sumProtocolIntegers(availableUTXOs, 'satoshis', `${assetName || 'XNA'} utxo.satoshis`);
@@ -7996,6 +8004,44 @@ function requireBaseAssetTransactionBuilder () {
 	  }
 
 	  /**
+	   * Start the fee-rate lookup without waiting for it.
+	   *
+	   * Every build needs the fee rate, and it depends on nothing the build
+	   * computes, so there is no reason for it to wait its turn behind the reads
+	   * that come first. Kicking it off early lets it share a round trip with
+	   * them; `estimateFee`/`estimateFeeSats` await the same memoised promise, so
+	   * the call still happens exactly once and a failure still surfaces there.
+	   *
+	   * The trailing `catch` only marks the promise as handled while nothing is
+	   * awaiting it — it attaches to a derived promise, so the original still
+	   * rejects for whoever awaits it later.
+	   *
+	   * @returns {void}
+	   */
+	  warmFeeRate() {
+	    if (this._feeRatePromise) {
+	      return;
+	    }
+	    this._feeRatePromise = this.utxoSelector.getFeeRate();
+	    this._feeRatePromise.catch(() => {});
+	  }
+
+	  /**
+	   * Start every read a build needs but that depends on nothing the build
+	   * computes: the fee rate and the NIP-040 asset marker.
+	   *
+	   * Both are memoised, so warming them costs no extra call — it only moves
+	   * them off the critical path. Every builder that reaches here goes on to
+	   * stamp a marker, so neither read is ever speculative.
+	   *
+	   * @returns {void}
+	   */
+	  warmChainReads() {
+	    this.warmFeeRate();
+	    this.resolveAssetMarker().catch(() => {});
+	  }
+
+	  /**
 	   * Estimate transaction fee.
 	   *
 	   * Both arguments accept either a count (legacy) or an array of descriptors
@@ -8008,9 +8054,7 @@ function requireBaseAssetTransactionBuilder () {
 	   * @returns {Promise<number>} Estimated fee in XNA
 	   */
 	  async estimateFee(inputs, outputs) {
-	    if (!this._feeRatePromise) {
-	      this._feeRatePromise = this.utxoSelector.getFeeRate();
-	    }
+	    this.warmFeeRate();
 	    const feeRate = await this._feeRatePromise;
 	    return this.utxoSelector.estimateFee(inputs, outputs, feeRate);
 	  }
@@ -8041,9 +8085,7 @@ function requireBaseAssetTransactionBuilder () {
 	   * @returns {Promise<bigint>} Estimated fee in satoshis
 	   */
 	  async estimateFeeSats(inputs, outputs) {
-	    if (!this._feeRatePromise) {
-	      this._feeRatePromise = this.utxoSelector.getFeeRate();
-	    }
+	    this.warmFeeRate();
 	    const feeRate = await this._feeRatePromise;
 	    return this.utxoSelector.estimateFeeSats(inputs, outputs, feeRate);
 	  }
@@ -8085,6 +8127,10 @@ function requireBaseAssetTransactionBuilder () {
 	      exclude = [],
 	      initialInputHint = 1
 	    } = options;
+
+	    // Covers the builders that never call assetExists, whose first read is
+	    // this one.
+	    this.warmChainReads();
 
 	    const addresses = await this._getAddresses();
 	    const excluded = UTXOSelector.toOutpointSet(exclude);
@@ -8715,6 +8761,9 @@ function requireBaseAssetTransactionBuilder () {
 	   * @returns {Promise<boolean>} True if exists
 	   */
 	  async assetExists(assetName) {
+	    // This is the first read a build performs and its answer gates nothing but
+	    // the guard below, so let the build's other chain reads travel alongside it.
+	    this.warmChainReads();
 	    try {
 	      const assetData = await this.rpc('getassetdata', [assetName]);
 	      return assetData !== null && assetData !== undefined;
@@ -8734,6 +8783,9 @@ function requireBaseAssetTransactionBuilder () {
 	   * @returns {Promise<object|null>} Asset data or null if not found
 	   */
 	  async getAssetData(assetName) {
+	    // This is the first read a build performs and its answer gates nothing but
+	    // the guard below, so let the build's other chain reads travel alongside it.
+	    this.warmChainReads();
 	    try {
 	      return await this.rpc('getassetdata', [assetName]);
 	    } catch (error) {

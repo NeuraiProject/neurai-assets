@@ -186,11 +186,14 @@ class UTXOSelector {
    * @throws {InsufficientFundsError} If not enough funds
    */
   async selectBaseCurrencyUTXOs(addresses, requiredAmount, buffer = 0.1, options = {}) {
-    // Get all XNA UTXOs
-    const allUTXOs = await this.getUTXOs(addresses, null);
-
-    // Get mempool and filter
-    const mempool = await this.getMempoolEntries(addresses);
+    // Both reads describe the same addresses and neither feeds the other: the
+    // mempool result only filters the UTXO result afterwards. Awaiting them in
+    // sequence spent one extra network round trip per selection, which on a
+    // remote RPC proxy is most of the time a wallet spends building anything.
+    const [allUTXOs, mempool] = await Promise.all([
+      this.getUTXOs(addresses, null),
+      this.getMempoolEntries(addresses)
+    ]);
     const unspentUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
 
     // Drop outpoints the caller already spends elsewhere in this transaction
@@ -256,11 +259,14 @@ class UTXOSelector {
       throw new Error('Asset name is required');
     }
 
-    // Get all asset UTXOs
-    const allUTXOs = await this.getUTXOs(addresses, assetName);
-
-    // Get mempool and filter
-    const mempool = await this.getMempoolEntries(addresses);
+    // Both reads describe the same addresses and neither feeds the other: the
+    // mempool result only filters the UTXO result afterwards. Awaiting them in
+    // sequence spent one extra network round trip per selection, which on a
+    // remote RPC proxy is most of the time a wallet spends building anything.
+    const [allUTXOs, mempool] = await Promise.all([
+      this.getUTXOs(addresses, assetName),
+      this.getMempoolEntries(addresses)
+    ]);
     const unspentUTXOs = this.filterMempoolSpentUTXOs(allUTXOs, mempool);
 
     const excluded = toOutpointSet(options.exclude);
@@ -382,8 +388,10 @@ class UTXOSelector {
    * @returns {Promise<bigint>} Total balance in 10^8-scaled units
    */
   async getBalanceRaw(addresses, assetName = null) {
-    const utxos = await this.getUTXOs(addresses, assetName);
-    const mempool = await this.getMempoolEntries(addresses);
+    const [utxos, mempool] = await Promise.all([
+      this.getUTXOs(addresses, assetName),
+      this.getMempoolEntries(addresses)
+    ]);
     const availableUTXOs = this.filterMempoolSpentUTXOs(utxos, mempool);
 
     return sumProtocolIntegers(availableUTXOs, 'satoshis', `${assetName || 'XNA'} utxo.satoshis`);
