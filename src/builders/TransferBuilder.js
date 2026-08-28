@@ -116,7 +116,8 @@ class TransferBuilder extends BaseAssetTransactionBuilder {
       ...recipients.map(r => ({ address: r.address, assetName })),
       { address: changeAddress, assetName }, // asset change (harmless over-count if absent)
       ...(isDepin
-        ? [{ address: changeAddress, assetName: ownerTokenName, kind: 'owner' }]
+        // Escolta: se gasta y se devuelve, luego es una transferencia.
+        ? [{ address: changeAddress, assetName: ownerTokenName }]
         : []),
     ];
 

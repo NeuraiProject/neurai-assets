@@ -78,6 +78,17 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
       ipfsHash = ''
     } = this.params;
 
+    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
+    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
+    // sitio de siempre, así que el orden de los errores no cambia.
+    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
+    const addresses = await this._getAddresses();
+    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
+      ownerTokenName,
+      addresses
+    );
+    ownerTokenLookup.catch(() => {});
+
     // 2. Check if asset already exists
     const exists = await this.assetExists(assetName);
     if (exists) {
@@ -94,18 +105,13 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
     const burnInfo = this.burnManager.getIssueRestrictedBurn();
 
     // 5. Get addresses
-    const addresses = await this._getAddresses();
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
     // 6. Find owner token UTXO (CRITICAL: node requires it as input)
-    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
     let ownerTokenUTXO;
     try {
-      ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
-        ownerTokenName,
-        addresses
-      );
+      ownerTokenUTXO = await ownerTokenLookup;
     } catch (error) {
       if (error instanceof OwnerTokenNotFoundError) {
         throw new OwnerTokenNotFoundError(
@@ -117,11 +123,16 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
     }
 
     // 7. Estimate fee (+1 for owner token input)
+    // Las salidas de asset deben describirse como lo que el nodo serializa.
+    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
+    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
+    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      changeAddress, // owner token return goes to change address
-      toAddress,
+      { kind: 'verifier', assetName, verifierString },
+      { address: changeAddress, assetName: ownerTokenName },
+      { address: toAddress, assetName, kind: 'issue', hasIpfs: Boolean(this.params.ipfsHash) },
     ];
     // Fund the XNA side. The owner-token input counts towards the size
     // estimate from the first round and is excluded from XNA selection.

@@ -65,6 +65,17 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
 
     const { assetName } = this.params;
 
+    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
+    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
+    // sitio de siempre, así que el orden de los errores no cambia.
+    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
+    const addresses = await this._getAddresses();
+    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
+      ownerTokenName,
+      addresses
+    );
+    ownerTokenLookup.catch(() => {});
+
     // 2. Check if asset exists and is restricted
     const assetData = await this.getAssetData(assetName);
     if (!assetData) {
@@ -75,17 +86,12 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     }
 
     // 3. Get wallet addresses
-    const addresses = await this._getAddresses();
     const changeAddress = await this.getChangeAddress();
 
     // 4. Find owner token (CRITICAL: must have this)
-    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
     let ownerTokenUTXO;
     try {
-      ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
-        ownerTokenName,
-        addresses
-      );
+      ownerTokenUTXO = await ownerTokenLookup;
     } catch (error) {
       if (error instanceof OwnerTokenNotFoundError) {
         throw new OwnerTokenNotFoundError(
@@ -101,7 +107,22 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
 
     // 6. Estimate fee
     // Outputs: XNA change + freeze/unfreeze operation (sent to changeAddress)
-    const outputAddresses = [changeAddress, changeAddress];
+    // Las salidas de asset deben describirse como lo que el nodo serializa.
+    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
+    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
+    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+    const isGlobal = operationType === 'FREEZE_ASSET' || operationType === 'UNFREEZE_ASSET';
+    const frozenAddresses = isGlobal ? [] : (this.params.addresses || []);
+    const outputAddresses = [
+      changeAddress,
+      // El token owner se gasta y se devuelve: transferencia.
+      { address: changeAddress, assetName: ownerTokenName },
+      ...(isGlobal
+        ? [{ assetName, kind: 'globalRestriction' }]
+        : frozenAddresses.map(target => ({
+            address: target, assetName, kind: 'restriction'
+          })))
+    ];
     // 7-10. Fund the XNA side (fee only, this operation does not burn). The
     //       owner-token input counts towards the size estimate from the first
     //       round and is excluded from XNA selection.

@@ -75,8 +75,24 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
       throw new Error('Cannot parse parent asset from SUB asset name');
     }
 
-    // 3. Check if parent asset exists
-    const parentExists = await this.assetExists(parentAssetName);
+    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
+    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
+    // sitio de siempre, así que el orden de los errores no cambia.
+    const ownerTokenName = AssetNameParser.getOwnerTokenName(parentAssetName);
+    const addresses = await this._getAddresses();
+    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
+      ownerTokenName,
+      addresses
+    );
+    ownerTokenLookup.catch(() => {});
+
+    // 3-4. Existencia del padre y del sub: independientes entre sí, así que
+    // se preguntan a la vez. Se comprueban en el mismo orden de antes, luego
+    // «no existe el padre» sigue ganando a «el sub ya existe».
+    const [parentExists, subExists] = await Promise.all([
+      this.assetExists(parentAssetName),
+      this.assetExists(assetName)
+    ]);
     if (!parentExists) {
       throw new ParentAssetNotFoundError(
         `Parent asset ${parentAssetName} does not exist. You must create the ROOT asset first.`,
@@ -84,8 +100,6 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
       );
     }
 
-    // 4. Check if SUB asset already exists
-    const subExists = await this.assetExists(assetName);
     if (subExists) {
       throw new AssetExistsError(
         `Asset ${assetName} already exists on the blockchain`,
@@ -94,18 +108,13 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
     }
 
     // 5. Get addresses
-    const addresses = await this._getAddresses();
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
     // 6. Find parent's owner token (CRITICAL: must have this)
-    const ownerTokenName = AssetNameParser.getOwnerTokenName(parentAssetName);
     let ownerTokenUTXO;
     try {
-      ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
-        ownerTokenName,
-        addresses
-      );
+      ownerTokenUTXO = await ownerTokenLookup;
     } catch (error) {
       if (error instanceof OwnerTokenNotFoundError) {
         throw new OwnerTokenNotFoundError(
@@ -126,7 +135,11 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      { address: changeAddress, assetName: ownerTokenName, kind: 'owner' },
+      // El token owner que la operación GASTA y devuelve viaja como
+      // transferencia (lleva importe), no con el payload 'owner', que sólo
+      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
+      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+      { address: changeAddress, assetName: ownerTokenName },
       { address: toAddress, assetName, kind: 'issue', hasIpfs },
       { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },
     ];

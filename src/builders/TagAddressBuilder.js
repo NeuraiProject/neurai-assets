@@ -106,7 +106,20 @@ class TagAddressBuilder extends BaseAssetTransactionBuilder {
 
     // 6. Estimate fee
     // Outputs: burn + XNA change + tag/untag operation (sent to changeAddress)
-    const outputAddresses = [burnInfo.address, changeAddress, changeAddress];
+    // Las salidas de asset deben describirse como lo que el nodo serializa.
+    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
+    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
+    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+    const outputAddresses = [
+      burnInfo.address,
+      changeAddress,
+      // El nodo devuelve el resto del qualifier a la dirección de cambio.
+      { address: changeAddress, assetName: qualifierName },
+      // Una salida de datos nulos por dirección etiquetada.
+      ...targetAddresses.map(target => ({
+        address: target, assetName: qualifierName, kind: 'tag'
+      }))
+    ];
     // 7-11. Fund the XNA side. The qualifier inputs count towards the size
     //       estimate from the first round and are excluded from XNA selection.
     const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });

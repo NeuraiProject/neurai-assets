@@ -88,6 +88,17 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
       ipfsHashes = []
     } = this.params;
 
+    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
+    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
+    // sitio de siempre, así que el orden de los errores no cambia.
+    const ownerTokenName = AssetNameParser.getOwnerTokenName(rootName);
+    const addresses = await this._getAddresses();
+    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
+      ownerTokenName,
+      addresses
+    );
+    ownerTokenLookup.catch(() => {});
+
     // 2. Check if parent asset exists
     const parentExists = await this.assetExists(rootName);
     if (!parentExists) {
@@ -97,31 +108,31 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
       );
     }
 
-    // 3. Check if any of the unique assets already exist
-    for (const tag of assetTags) {
-      const fullName = `${rootName}#${tag}`;
-      const exists = await this.assetExists(fullName);
-      if (exists) {
-        throw new AssetExistsError(
-          `Unique asset ${fullName} already exists on the blockchain`,
-          fullName
-        );
-      }
+    // 3. Check if any of the unique assets already exist.
+    // En fila, emitir diez únicos costaba diez idas y vueltas antes de
+    // empezar a construir. Ninguna depende de la anterior. El resultado se
+    // recorre en orden, así que el error sigue nombrando el primer nombre
+    // repetido de la lista, no el que el nodo conteste primero.
+    const uniqueNames = assetTags.map(tag => `${rootName}#${tag}`);
+    const uniqueExists = await Promise.all(
+      uniqueNames.map(fullName => this.assetExists(fullName))
+    );
+    const takenIndex = uniqueExists.findIndex(Boolean);
+    if (takenIndex !== -1) {
+      throw new AssetExistsError(
+        `Unique asset ${uniqueNames[takenIndex]} already exists on the blockchain`,
+        uniqueNames[takenIndex]
+      );
     }
 
     // 4. Get addresses
-    const addresses = await this._getAddresses();
     const toAddress = await this.getToAddress();
     const changeAddress = await this.getChangeAddress();
 
     // 5. Find parent's owner token (CRITICAL: must have this)
-    const ownerTokenName = AssetNameParser.getOwnerTokenName(rootName);
     let ownerTokenUTXO;
     try {
-      ownerTokenUTXO = await this.ownerTokenManager.findOwnerTokenUTXO(
-        ownerTokenName,
-        addresses
-      );
+      ownerTokenUTXO = await ownerTokenLookup;
     } catch (error) {
       if (error instanceof OwnerTokenNotFoundError) {
         throw new OwnerTokenNotFoundError(
@@ -143,7 +154,11 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      { address: changeAddress, assetName: ownerTokenName, kind: 'owner' },
+      // El token owner que la operación GASTA y devuelve viaja como
+      // transferencia (lleva importe), no con el payload 'owner', que sólo
+      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
+      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+      { address: changeAddress, assetName: ownerTokenName },
       ...assetTags.map(tag => ({
         address: toAddress,
         assetName: `${rootName}#${tag}`,

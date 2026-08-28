@@ -62,18 +62,100 @@ function estimateInputVbytes(utxo) {
 }
 
 /**
+ * Encoders that produce the exact scriptPubKey the node will see.
+ *
+ * Sizing asset outputs from a hand-written byte formula drifted: the owner
+ * token a reissue RETURNS is serialized as a transfer (it carries an amount),
+ * not as the owner payload an issuance CREATES, and the null-asset-data
+ * outputs of tag/freeze were not counted at all — those outputs are not
+ * P2PKH-plus-payload, they replace the destination script entirely. The result
+ * was twelve of eighteen operations budgeting below what the node charges.
+ *
+ * Asking the serializer is the only way to keep this from drifting again: the
+ * numbers below are not a model of the encoding, they ARE the encoding.
+ */
+const ct = require('@neuraiproject/neurai-create-transaction');
+
+/** Bytes a CompactSize length prefix occupies for `n`. */
+function compactSizeBytes(n) {
+  if (n < 253) return 1;
+  if (n <= 0xffff) return 3;
+  if (n <= 0xffffffff) return 5;
+  return 9;
+}
+
+/** An IPFS hash of the right LENGTH; only its size matters here. */
+const IPFS_PLACEHOLDER = 'Qm' + 'a'.repeat(44);
+
+/**
+ * The exact scriptPubKey for an asset-bearing output descriptor, or null when
+ * the descriptor names no asset operation.
+ *
+ * Values are placeholders on purpose: every field the amount or the flag lands
+ * in is fixed-width, so a zero costs the same bytes as the real number. The
+ * name, the address and the presence of IPFS are the only things that move the
+ * size, and those come from the descriptor.
+ *
+ * @param {object} descriptor - Output descriptor
+ * @returns {Uint8Array|null} Encoded script, or null
+ */
+function assetOutputScript(descriptor) {
+  const { address, assetName, kind = 'transfer' } = descriptor;
+  const ipfs = descriptor.hasIpfs ? (descriptor.ipfsHash || IPFS_PLACEHOLDER) : undefined;
+
+  switch (kind) {
+    case 'owner':
+      return ct.encodeOwnerAssetScript(address, assetName);
+    case 'issue':
+      return ct.encodeNewAssetScript(address, assetName, 0n, 0, true, ipfs);
+    case 'reissue':
+      return ct.encodeReissueAssetScript(address, assetName, 0n, undefined, true, ipfs);
+    case 'tag':
+      return ct.encodeNullAssetTagScript(address, assetName, 'tag');
+    case 'restriction':
+      return ct.encodeNullAssetRestrictionScript(address, assetName, 1);
+    case 'globalRestriction':
+      return ct.encodeGlobalRestrictionScript(assetName, 1);
+    case 'verifier':
+      return ct.encodeVerifierStringScript(descriptor.verifierString || '');
+    case 'transfer':
+      return ct.encodeAssetTransferScript(address, assetName, 0n);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Kinds whose script REPLACES the destination rather than extending it.
+ *
+ * A tag, a restriction or a verifier string is not "a payment with a payload
+ * bolted on": there is no P2PKH to pay. Adding a destination's bytes to these
+ * over-counts; treating them as plain destinations, which is what the builders
+ * used to do, under-counts by far more.
+ */
+const STANDALONE_KINDS = new Set(['tag', 'restriction', 'globalRestriction', 'verifier']);
+
+/**
+ * Fallback used only when the encoders cannot express a descriptor — an
+ * address family they do not accept, say. Keeps the previous behaviour rather
+ * than throwing in the middle of a fee estimate.
+ */
+function assetPayloadBytesApprox(descriptor) {
+  const nameLength = String(descriptor.assetName || '').length;
+  const kind = descriptor.kind || 'transfer';
+  let payload = 5 + nameLength;
+  if (kind === 'issue') payload += 11;
+  else if (kind === 'reissue') payload += 10;
+  else if (kind !== 'owner') payload += 8;
+  if (descriptor.hasIpfs) payload += 34;
+  return 1 + (payload > 75 ? 2 : 1) + payload + 1;
+}
+
+/**
  * Bytes an asset payload adds on top of a plain destination output.
  *
- * An asset output is `<destination script> OP_XNA_ASSET <pushdata payload>
- * OP_DROP`, so it costs the destination plus the wrapper (OP_XNA_ASSET,
- * the pushdata prefix and OP_DROP) plus the payload itself:
- *
- *   marker(3) + type(1) + nameLength(1) + name + kind-specific tail
- *
- * Sizing these as bare P2PKH outputs under-counts a transaction by tens to
- * hundreds of bytes. That is invisible while the node's fee rate sits well
- * above its minimum relay fee, and becomes `min relay fee not met` as soon as
- * it does not — which is exactly the failure this file's header warns about.
+ * Kept for callers that only want the delta. Standalone kinds have no
+ * destination to add to, so this is not meaningful for them.
  *
  * @param {object} descriptor - Output descriptor with `assetName` and `kind`
  * @returns {number} Extra bytes, or 0 when the output carries no asset payload
@@ -82,46 +164,14 @@ function assetPayloadBytes(descriptor) {
   if (!descriptor || typeof descriptor !== 'object' || !descriptor.assetName) {
     return 0;
   }
-
-  // One byte per character, matching how the payload encodes the name
-  // (`serializeString` -> `asciiBytes`, which writes a single byte per char).
-  // Node's byte-length helper would be equivalent here, but it hangs off a
-  // global that browsers do not have: using it broke the extension bundle with
-  // "Buffer is not defined", and this library does much of its work there.
-  const nameLength = String(descriptor.assetName).length;
-  const kind = descriptor.kind || 'transfer';
-
-  // marker(3) + type(1) + CompactSize name length(1) + name
-  let payload = 5 + nameLength;
-
-  switch (kind) {
-    case 'owner':
-      // The owner payload carries no amount: it is always exactly one unit.
-      break;
-    case 'issue':
-      // amount(8) + units(1) + reissuable(1) + has_ipfs(1)
-      payload += 11;
-      break;
-    case 'reissue':
-      // amount(8) + units(1) + reissuable(1)
-      payload += 10;
-      break;
-    default:
-      // transfer: amount(8)
-      payload += 8;
-      break;
+  try {
+    const script = assetOutputScript(descriptor);
+    if (!script) return 0;
+    const base = isPQAddress(descriptor.address) ? 34 : 25;
+    return script.length - base;
+  } catch {
+    return assetPayloadBytesApprox(descriptor);
   }
-
-  if (descriptor.hasIpfs) {
-    payload += 34;
-  }
-
-  // OP_XNA_ASSET(1) + pushdata prefix + OP_DROP(1). Payloads over 75 bytes
-  // need OP_PUSHDATA1, which is one byte wider — reachable with the 121-char
-  // asset names testnet and regtest allow for DePIN.
-  const pushPrefix = payload > 75 ? 2 : 1;
-
-  return 1 + pushPrefix + payload + 1;
 }
 
 /**
@@ -135,10 +185,26 @@ function assetPayloadBytes(descriptor) {
  * @returns {number} Estimated bytes
  */
 function estimateOutputBytes(target) {
+  if (typeof target !== 'string' && target && (target.assetName || target.kind === 'verifier')) {
+    try {
+      const script = assetOutputScript(target);
+      if (script) {
+        // value(8) + CompactSize(scriptLen) + script
+        return 8 + compactSizeBytes(script.length) + script.length;
+      }
+    } catch {
+      // fall through to the approximation
+    }
+    if (STANDALONE_KINDS.has(target.kind)) {
+      return VBYTES.legacyOutputBytes;
+    }
+    const base = isPQAddress(target.address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
+    return base + assetPayloadBytesApprox(target);
+  }
+
   const address =
     typeof target === 'string' ? target : (target && target.address) || '';
-  const base = isPQAddress(address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
-  return base + assetPayloadBytes(typeof target === 'string' ? null : target);
+  return isPQAddress(address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
 }
 
 /**
@@ -168,6 +234,8 @@ function estimateTransactionVbytes(inputs, outputs) {
 
 module.exports = {
   VBYTES,
+  compactSizeBytes,
+  assetOutputScript,
   isPQAddress,
   isPQScript,
   estimateInputVbytes,
