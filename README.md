@@ -2,6 +2,30 @@
 
 Complete asset management library for Neurai blockchain. Supports creation, reissuance, and queries for all asset types in a non-custodial way.
 
+> **1.6.0**: full DEPIN support — sub-DEPIN issuance (which needs the
+> **immediate** parent's owner token), holder freeze/unfreeze through the same
+> `freezeAddresses`/`unfreezeAddresses` calls, `selfRevokeDepin` and
+> `listDepinAddresses`. Also a fix beyond DEPIN: the parent of `A/B/C` resolved
+> to `A` instead of `A/B`, so every third-level issuance — sub-asset,
+> sub-qualifier or sub-DEPIN — was rejected by the node.
+>
+> **1.5.3**: fee estimation stopped modelling the payload encoding and started
+> measuring it. Twelve of eighteen operations were budgeting below the node's
+> minimum, which forced a rebuild-and-re-sign on every one of them (see
+> *Fee estimation*).
+>
+> **1.5.2**: same RPC calls, fewer round trips. The UTXO and mempool reads run
+> together, and the fee rate and NIP-040 marker start alongside the first read
+> instead of queuing behind it — 6 calls in 3 round trips instead of 6, which
+> against a remote proxy halves the time to build anything.
+>
+> **1.5.1**: fix — `Buffer` reached the browser bundle through the fee sizing
+> helper and broke any asset build in an extension.
+>
+> **1.5.0**: `createTransactionBuild` canonical contract; decimal strings for
+> amounts; exact-satoshi funding loop; reissue built locally so assets with
+> `units > 0` can be reissued at all.
+>
 > **1.4.1**: fix — the constructor dropped `config.assetMarker`, so the
 > wallet-level override documented in 1.4.0 never reached the builders
 > (per-operation `params.assetMarker` was unaffected). Precedence is now
@@ -18,6 +42,7 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 - ✅ **Non-custodial**: Library builds unsigned transactions, your wallet signs them
 - ✅ **All asset types**: ROOT, SUB, UNIQUE (NFTs), QUALIFIER, RESTRICTED, DEPIN
 - ✅ **Complete operations**: Creation, reissuance, tagging, freezing
+- ✅ **DEPIN management**: sub-assets, holder freeze/unfreeze, self-revocation, validity queries
 - ✅ **RPC queries**: Complete wrapper for all asset query methods
 - ✅ **Client-side validation**: Prevents errors before creating transactions
 - ✅ **Owner token protection**: Validation to prevent permanent loss
@@ -33,7 +58,8 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 | **QUALIFIER** | `#KYC` | 2000 XNA | Compliance tag |
 | **SUB_QUALIFIER** | `#PARENT/#SUB` | 200 XNA | Sub-qualifier |
 | **RESTRICTED** | `$SECURITY` | 3000 XNA | Security token with compliance |
-| **DEPIN** | `&DEVICE` or `&DEVICE/ROUTER001` | 10 XNA | Soulbound asset with holder validity controls |
+| **DEPIN** | `&DEVICE` | 10 XNA | Soulbound asset with holder validity controls |
+| **SUB DEPIN** | `&DEVICE/ROUTER001` | 10 XNA | Same burn as a root DEPIN, but requires the **immediate parent's** owner token |
 
 ## Quantities and asset units
 
@@ -194,6 +220,16 @@ const result = await assets.createDepinAsset({
 > **Note**: DEPIN assets always use `units = 0`. Recipient and change destinations
 > can be either legacy or AuthScript, as long as they belong to the same chain family.
 
+A **sub-DEPIN** (`&DEVICE/ROUTER001`) costs the same as a root DEPIN, but the
+node requires the transaction to spend and return the **immediate parent's**
+owner token — `&DEVICE!` here, and `&DEVICE/ROUTER001!` for a third level. The
+library finds it, adds it as an input and returns it automatically; without it
+the node rejects the transaction with
+`Trying to create outpoint for asset that you don't have`.
+
+So `&A/B/C` needs `&A/B!`, **not** `&A!`. Before 1.6.0 the library resolved the
+parent as the root and every third-level issuance was rejected.
+
 ### Transfer Asset
 
 ```javascript
@@ -299,12 +335,30 @@ const result = await assets.reissueRestrictedAsset({
 ### Freeze Addresses
 
 ```javascript
-// Requires the restricted asset's owner token ($SECURITY!)
+// Requires the asset's owner token ($SECURITY! or &DEVICE!)
 const result = await assets.freezeAddresses({
   assetName: '$SECURITY',
   addresses: ['NAddress1...', 'NAddress2...']
 });
+
+// Since 1.6.0, the same call freezes a DEPIN holder
+await assets.freezeAddresses({
+  assetName: '&DEVICE',
+  addresses: ['NDevice1...']
+});
 ```
+
+Both asset kinds share this operation because the node builds them identically:
+an owner-token escort plus one null-asset-data output carrying `(name, flag)`.
+A frozen DEPIN holder keeps the asset but `checkDepinValidity` reports
+`valid: 0`.
+
+Two rules the library enforces before the node does:
+
+- the address holding the owner token **cannot** be frozen or revoked — if it
+  were, nobody could undo it;
+- **global** freeze does not apply to DEPIN assets; manage them holder by
+  holder.
 
 ### Unfreeze Addresses
 
@@ -315,6 +369,8 @@ const result = await assets.unfreezeAddresses({
 });
 ```
 
+This is also how an owner undoes a holder's self-revocation.
+
 ### Freeze Asset Globally
 
 ```javascript
@@ -322,6 +378,24 @@ const result = await assets.freezeAssetGlobally({
   assetName: '$SECURITY'
 });
 ```
+
+> Restricted assets only. Calling it on a DEPIN asset throws: the node has no
+> global restriction for them.
+
+### Self-Revoke a DEPIN Asset (1.6.0+)
+
+```javascript
+// Run from the wallet that HOLDS the device asset — no owner token needed.
+const result = await assets.selfRevokeDepin({ assetName: '&DEVICE' });
+```
+
+A holder renouncing its own asset. The proof of ownership is spending its own
+asset UTXO, which returns to the same address together with the revocation
+mark, so the operation needs no owner token and no burn.
+
+⚠️ Only the asset owner can undo it, with `unfreezeAddresses`. If the revoking
+address also held the owner token nobody could, so the library refuses that
+case — move the owner token elsewhere first.
 
 ### Unfreeze Asset Globally
 
@@ -466,6 +540,21 @@ console.log(validity);
 // }
 ```
 
+### List DEPIN Addresses With a Revealed Public Key (1.6.0+)
+
+```javascript
+const addresses = await assets.listDepinAddresses('&DEVICE');
+console.log(addresses);
+// [ { address: 'tAhTaUnh...', pubkey: '03d0813ea333...' } ]
+```
+
+The subset of holders that can take part in DEPIN messaging, which needs the
+public key. It is **not** a replacement for `listDepinHolders`: it says nothing
+about validity or amounts, and a holder that has never spent does not appear.
+
+Requires the node running with `-pubkeyindex` (and a reindex). Without it the
+error says so instead of hiding behind a generic failure.
+
 ### Detect Asset Type
 
 ```javascript
@@ -589,6 +678,16 @@ rule: sign, decimals, `units` divisibility and `MAX_MONEY` apply equally.
 consumer has to move on this release. New integrations should read
 `createTransactionBuild` only.
 
+**1.6.0** adds DEPIN management and fixes two things that were silently broken.
+No API changed shape:
+
+| | Before 1.6.0 | 1.6.0 |
+| --- | --- | --- |
+| Parent of `A/B/C` | `A` — every third-level issuance was rejected | `A/B`, as the node resolves it |
+| Create `&A/B` | rejected: the parent's owner token was never spent | works |
+| `freezeAddresses` / `unfreezeAddresses` | restricted assets only | also DEPIN (`&NAME`) |
+| Self-revoke, `listDepinAddresses` | — | new |
+
 ### Serializer version
 
 The canonical contract needs `@neuraiproject/neurai-create-transaction`
@@ -615,13 +714,18 @@ The value read from the chain is still used, to check that the requested
 
 ### Reissue is built locally
 
-`createrawtransaction`'s `reissue` object has no field for units, so the node
-fills in `0` and refuses any asset whose units are above zero
-(`unit must be larger than current unit selection`). Since 1.5.0 the two
-reissue operations therefore skip that RPC and build their `rawTx` with
-`createFromOperation`, which can say "keep the current units". They report
-`buildStrategy: 'local-builder'`; every other operation still reports
-`'rpc-node'`.
+Some operations cannot be expressed through the node's `createrawtransaction`,
+even though the node accepts the resulting transaction perfectly well. Those
+build their `rawTx` with `createFromOperation` instead and report
+`buildStrategy: 'local-builder'`; everything else still reports `'rpc-node'`.
+
+| Operation | Why the RPC cannot express it | Since |
+| --- | --- | --- |
+| `reissueAsset`, `reissueRestrictedAsset` | the `reissue` object has no units field, so the node assumes `0` and refuses any asset with units above zero (`unit must be larger than current unit selection`) | 1.5.0 |
+| `freezeAddresses` / `unfreezeAddresses` on a **DEPIN** asset | `freeze_addresses` demands a restricted name: `a valid restricted asset name must be provided` | 1.6.0 |
+| `selfRevokeDepin` | no equivalent RPC object | 1.6.0 |
+
+Restricted-asset freezing keeps the RPC path unchanged.
 
 This is why `@neuraiproject/neurai-create-transaction` is a runtime
 **dependency**, not just a dev one.
@@ -640,10 +744,13 @@ When you create an asset, an **owner token** is automatically generated (e.g., `
 
 ⚠️ **CRITICAL**: The owner token is required to:
 - Reissue (mint more supply)
-- Create SUB assets
+- Create SUB assets — the **immediate** parent's token: `A/B/C` needs `A/B!`
+- Create sub-DEPIN assets — likewise, `&A/B` needs `&A!`
 - Manage tags (if qualifier)
-- Freeze/unfreeze (if restricted)
-- Manage DEPIN reissuance and controls (if depin)
+- Freeze/unfreeze holders (restricted **and** DEPIN)
+
+A holder can always self-revoke its own DEPIN asset without any owner token
+(`selfRevokeDepin`), but only the owner can undo that.
 
 ⚠️ **If you lose the owner token, you lose these capabilities PERMANENTLY**
 
@@ -664,13 +771,14 @@ The library automatically validates that the owner token is returned in each ope
 | Create QUALIFIER (root) | 2000 |
 | Create QUALIFIER (sub) | 200 |
 | Create RESTRICTED asset | 3000 |
-| Create DEPIN asset | 10 |
+| Create DEPIN asset (root or sub) | 10 |
 | Reissue ROOT/SUB | 200 |
 | Reissue DEPIN | 200 |
 | Reissue RESTRICTED | 200 |
 | Tag/Untag address | 0 (network fee only; spends 1 unit of the qualifier per address) |
 | Freeze/Unfreeze address | 0 (network fee only) |
 | Freeze/Unfreeze global | 0 (network fee only) |
+| Self-revoke DEPIN | 0 (network fee only) |
 
 **Note**: In addition to the burned cost, all operations pay a network fee (calculated automatically).
 
@@ -813,16 +921,20 @@ const builder = new builders.IssueRootBuilder(rpc, {
 const result = await builder.build();
 ```
 
-The builders module also includes:
+The builders module exports:
 
+- `DepinSelfRevokeBuilder`
+- `FreezeAddressBuilder`
 - `IssueDepinBuilder`
+- `IssueQualifierBuilder`
+- `IssueRestrictedBuilder`
 - `IssueRootBuilder`
 - `IssueSubBuilder`
 - `IssueUniqueBuilder`
-- `IssueQualifierBuilder`
-- `IssueRestrictedBuilder`
 - `ReissueBuilder`
 - `ReissueRestrictedBuilder`
+- `TagAddressBuilder`
+- `TransferBuilder`
 
 ## Error Handling
 
@@ -917,6 +1029,8 @@ Estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) 
 
 Outputs that carry an asset payload are sized as such, not as bare P2PKH outputs. An asset output is `<destination> OP_XNA_ASSET <pushdata payload> OP_DROP`, which adds roughly 20-60 bytes; ignoring that under-counts a transaction by a few percent, and that is enough to fall below the floor whenever the node's fee rate sits close to its minimum relay fee.
 
+Since `1.5.3` those sizes are **not modelled, they are measured**: `feeSizing` asks `@neuraiproject/neurai-create-transaction` to encode the very script the output will carry and takes its length. The hand-written formula it replaced had drifted in two ways — the owner token an operation *returns* is serialized as a transfer (it carries an amount), not with the `owner` payload that an issuance *creates*, and the null-asset-data outputs of tag/freeze were not counted at all, since their script **replaces** the destination instead of extending it. Twelve of eighteen operations were budgeting below what the node charges. The regtest e2e now asserts, for every operation, that the budgeted fee reaches the node's minimum for the signed vsize.
+
 You should not need to call these helpers directly; they are wired into every builder. They are documented here so you can audit the fee math or use the same constants if you compose transactions outside the standard builder flow.
 
 ```js
@@ -939,11 +1053,23 @@ estimateInputVbytes({ address: 'nq1…' });        // 977
 estimateInputVbytes({ address: 'mgRYHdMq…' });   // 148
 estimateOutputBytes('tnq1…');                    // 43
 
-// Asset outputs declare their payload: kind is 'transfer' (default),
-// 'owner', 'issue' or 'reissue'.
-estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX' });                   // 55
-estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX!', kind: 'owner' });   // 48
+// Asset outputs declare their payload. Sizes come from the real encoder, so
+// they match the bytes the node will see.
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX' });                   // 55  transfer (default)
 estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX', kind: 'issue' });    // 58
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX', kind: 'reissue' });  // 57
+
+// 'owner' describes the token an ISSUANCE CREATES — it carries no amount.
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX!', kind: 'owner' });   // 48
+// The token an operation SPENDS AND RETURNS is a transfer, 8 bytes wider.
+estimateOutputBytes({ address: 't7pv…', assetName: 'ROOTX!' });                  // 56
+
+// Null-asset-data kinds have no destination: their script replaces it, so
+// nothing is added on top.
+estimateOutputBytes({ address: 't7pv…', assetName: '#KYC', kind: 'tag' });          // 38
+estimateOutputBytes({ address: 't7pv…', assetName: '$SEC', kind: 'restriction' });  // 38
+estimateOutputBytes({ assetName: '$SEC', kind: 'globalRestriction' });             // 19
+estimateOutputBytes({ kind: 'verifier', verifierString: '#KYC' });                 // 17
 
 const vbytes = estimateTransactionVbytes(
   [{ script: '5120…' }, { address: 'mgRYHdMq…' }],   // 1 PQ + 1 legacy input
@@ -952,6 +1078,8 @@ const vbytes = estimateTransactionVbytes(
 ```
 
 The constants mirror those exported from `@neuraiproject/neurai-sign-transaction` (`VBYTES`). They are inlined here on purpose: depending on the full signer would pull `bitcoinjs-lib` and `@noble/post-quantum` into the IIFE / browser bundles, far more weight than these constants need. The signer remains the source of truth — if it ever bumps a vbytes value, this file must follow.
+
+`feeSizing` does depend on `neurai-create-transaction` for the payload sizes above, which is already a runtime dependency and is bundled anyway. If an encoder cannot express a descriptor — an address family it does not accept — the estimate falls back to the previous formula rather than throwing in the middle of a fee calculation.
 
 ### Limitations
 

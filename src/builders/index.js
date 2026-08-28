@@ -20,6 +20,7 @@ const IssueRestrictedBuilder = require('./IssueRestrictedBuilder');
 const ReissueRestrictedBuilder = require('./ReissueRestrictedBuilder');
 const TagAddressBuilder = require('./TagAddressBuilder');
 const FreezeAddressBuilder = require('./FreezeAddressBuilder');
+const DepinSelfRevokeBuilder = require('./DepinSelfRevokeBuilder');
 
 module.exports = {
   // Base
@@ -38,5 +39,8 @@ module.exports = {
   IssueRestrictedBuilder,
   ReissueRestrictedBuilder,
   TagAddressBuilder,
-  FreezeAddressBuilder
+  FreezeAddressBuilder,
+
+  // DEPIN
+  DepinSelfRevokeBuilder
 };

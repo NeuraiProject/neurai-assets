@@ -12,7 +12,12 @@
 
 const BaseAssetTransactionBuilder = require('./BaseAssetTransactionBuilder');
 const { OutputFormatter } = require('../utils');
-const { AssetExistsError } = require('../errors');
+const AssetNameParser = require('../utils/assetNameParser');
+const {
+  AssetExistsError,
+  ParentAssetNotFoundError,
+  OwnerTokenNotFoundError
+} = require('../errors');
 const { IpfsValidator } = require('../validators');
 
 class IssueDepinBuilder extends BaseAssetTransactionBuilder {
@@ -63,12 +68,54 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
       ipfsHash = ''
     } = this.params;
 
+    // Un sub-DePIN ("&RAIZ/SENSOR") sigue siendo AssetType::DEPIN para el nodo
+    // —misma quema que la raíz— pero exige GASTAR y devolver el token owner del
+    // padre inmediato, igual que cualquier sub-asset (assets.cpp:731, :3784).
+    // Sin ese input el nodo rechaza con «Trying to create outpoint for asset
+    // that you don't have: &RAIZ!».
+    const parentAssetName = AssetNameParser.getParent(assetName);
+    const parentOwnerTokenName = parentAssetName
+      ? AssetNameParser.getOwnerTokenName(parentAssetName)
+      : null;
+
+    const addresses = await this._getAddresses();
+    const parentOwnerLookup = parentOwnerTokenName
+      ? this.ownerTokenManager.findOwnerTokenUTXO(parentOwnerTokenName, addresses)
+      : null;
+    if (parentOwnerLookup) parentOwnerLookup.catch(() => {});
+
     const exists = await this.assetExists(assetName);
     if (exists) {
       throw new AssetExistsError(
         `Asset ${assetName} already exists on the blockchain`,
         assetName
       );
+    }
+
+    if (parentAssetName) {
+      const parentExists = await this.assetExists(parentAssetName);
+      if (!parentExists) {
+        throw new ParentAssetNotFoundError(
+          `Parent DEPIN asset ${parentAssetName} does not exist. Create it before ${assetName}.`,
+          parentAssetName
+        );
+      }
+    }
+
+    let parentOwnerUTXO = null;
+    if (parentOwnerLookup) {
+      try {
+        parentOwnerUTXO = await parentOwnerLookup;
+      } catch (error) {
+        if (error instanceof OwnerTokenNotFoundError) {
+          throw new OwnerTokenNotFoundError(
+            `You must own the parent asset's owner token (${parentOwnerTokenName}) to create ` +
+            `the sub-DEPIN asset ${assetName}.`,
+            parentOwnerTokenName
+          );
+        }
+        throw error;
+      }
     }
 
     const burnInfo = this.burnManager.getIssueDepinBurn();
@@ -78,11 +125,20 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
+      // La escolta del padre se devuelve como transferencia: lleva importe.
+      ...(parentOwnerUTXO
+        ? [{ address: changeAddress, assetName: parentOwnerTokenName }]
+        : []),
       { address: toAddress, assetName, kind: 'issue', hasIpfs },
       { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },
     ];
     const burnSats = this.xnaAmountToSats(burnInfo.amount, { label: 'burn amount' });
-    const funding = await this.fundXnaInputs({ outputs: outputAddresses, burnSats });
+    const funding = await this.fundXnaInputs({
+      outputs: outputAddresses,
+      burnSats,
+      extraInputs: parentOwnerUTXO ? [parentOwnerUTXO] : [],
+      exclude: parentOwnerUTXO ? [parentOwnerUTXO] : []
+    });
 
     const baseCurrencyUTXOs = funding.utxos;
     const actualFee = this.satsToDisplay(funding.feeSats);
@@ -95,11 +151,28 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
       satoshis: utxo.satoshis
     }));
 
+    if (parentOwnerUTXO) {
+      inputs.push({
+        txid: parentOwnerUTXO.txid,
+        vout: parentOwnerUTXO.outputIndex,
+        address: parentOwnerUTXO.address,
+        assetName: parentOwnerUTXO.assetName,
+        satoshis: parentOwnerUTXO.satoshis
+      });
+    }
+
     const outputs = [];
     outputs.push({ [burnInfo.address]: burnInfo.amount });
 
     if (xnaChangeSats > 0n) {
       outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
+    }
+
+    if (parentOwnerUTXO) {
+      outputs.push(this.ownerTokenManager.createOwnerTokenReturnOutput(
+        parentOwnerTokenName,
+        changeAddress
+      ));
     }
 
     const issueOutput = OutputFormatter.formatIssueOutput({
@@ -116,9 +189,13 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
     const orderedOutputs = this.outputOrderer.order(outputs);
     const rawTx = await this.buildRawTransaction(inputs, orderedOutputs);
 
+    const allUTXOs = parentOwnerUTXO
+      ? [...baseCurrencyUTXOs, parentOwnerUTXO]
+      : baseCurrencyUTXOs;
+
     return this.formatResult(
       rawTx,
-      baseCurrencyUTXOs,
+      allUTXOs,
       inputs,
       orderedOutputs,
       actualFee,
@@ -126,6 +203,8 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
       {
         assetName,
         ownerTokenName: `${assetName}!`,
+        parentAssetName,
+        parentOwnerTokenUsed: parentOwnerTokenName,
         operationType: 'ISSUE_DEPIN',
         createTransactionBuild: await this.buildCreateTransactionBuild(
           'ISSUE_DEPIN',
@@ -137,6 +216,7 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
             quantityRaw: this.assetAmountToRaw(quantity, 0, 'quantity'),
             ipfsHash: hasIpfs ? ipfsHash : undefined,
             ownerTokenAddress: changeAddress,
+            ...(parentOwnerUTXO ? { parentOwnerAddress: changeAddress } : {}),
             reissuable,
             // Canonical label, so create-transaction's mainnet DePIN guard
             // actually runs: it treats any unknown value (including the alias
@@ -156,6 +236,7 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
             quantityRaw: this.toSatoshis(quantity, 0),
             ipfsHash: hasIpfs ? ipfsHash : undefined,
             ownerTokenAddress: changeAddress,
+            ...(parentOwnerUTXO ? { parentOwnerAddress: changeAddress } : {}),
             reissuable
           }
         )

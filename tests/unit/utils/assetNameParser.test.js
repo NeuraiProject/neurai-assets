@@ -238,3 +238,37 @@ describe('AssetNameParser', () => {
     });
   });
 });
+
+describe('parent resolution — immediate, not root (1.6.0)', () => {
+  // El nodo resuelve el padre con find_last_of (assets.cpp GetParentName,
+  // misma rama para SUB y DEPIN). Partir por el primer '/' devolvía la raíz,
+  // así que toda emisión de tercer nivel buscaba el token owner equivocado y
+  // el nodo la rechazaba con «Trying to create outpoint for asset that you
+  // don't have».
+  it('resolves A/B/C to A/B, not A', () => {
+    expect(AssetNameParser.getParent('A/B/C')).to.equal('A/B');
+    expect(AssetNameParser.parse('A/B/C').subName).to.equal('C');
+  });
+
+  it('resolves &A/B/C to &A/B, not &A', () => {
+    expect(AssetNameParser.getParent('&A/B/C')).to.equal('&A/B');
+    expect(AssetNameParser.parse('&A/B/C').subName).to.equal('C');
+  });
+
+  it('still resolves a single level', () => {
+    expect(AssetNameParser.getParent('A/B')).to.equal('A');
+    expect(AssetNameParser.getParent('&A/B')).to.equal('&A');
+    expect(AssetNameParser.getParent('#Q/SUB')).to.equal('#Q');
+  });
+
+  it('a root DEPIN has no parent', () => {
+    expect(AssetNameParser.getParent('&ROOT')).to.equal(null);
+  });
+
+  it('gives the owner token of a sub-DEPIN parent', () => {
+    expect(AssetNameParser.getOwnerTokenName(AssetNameParser.getParent('&FLEET/SENSOR')))
+      .to.equal('&FLEET!');
+    expect(AssetNameParser.getOwnerTokenName(AssetNameParser.getParent('&FLEET/SENSOR/ALPHA')))
+      .to.equal('&FLEET/SENSOR!');
+  });
+});

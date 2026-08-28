@@ -26,6 +26,7 @@ const {
   IssueRootBuilder,
   IssueSubBuilder,
   IssueDepinBuilder,
+  DepinSelfRevokeBuilder,
   IssueUniqueBuilder,
   IssueQualifierBuilder,
   IssueRestrictedBuilder,
@@ -299,9 +300,9 @@ class NeuraiAssets {
   }
 
   /**
-   * Freeze specific addresses for a restricted asset
+   * Freeze specific addresses for a restricted or DEPIN asset
    * @param {object} params - Freeze parameters
-   * @param {string} params.assetName - Restricted asset name ($NAME)
+   * @param {string} params.assetName - Restricted ($NAME) or DEPIN (&NAME) asset
    * @param {Array<string>} params.addresses - Addresses to freeze
    * @returns {Promise<object>} Transaction data
    */
@@ -311,9 +312,9 @@ class NeuraiAssets {
   }
 
   /**
-   * Unfreeze specific addresses for a restricted asset
+   * Unfreeze specific addresses for a restricted or DEPIN asset
    * @param {object} params - Unfreeze parameters
-   * @param {string} params.assetName - Restricted asset name ($NAME)
+   * @param {string} params.assetName - Restricted ($NAME) or DEPIN (&NAME) asset
    * @param {Array<string>} params.addresses - Addresses to unfreeze
    * @returns {Promise<object>} Transaction data
    */
@@ -501,6 +502,40 @@ class NeuraiAssets {
    */
   async cancelSnapshotRequest(assetName, blockHeight) {
     return await this.queries.cancelSnapshotRequest(assetName, blockHeight);
+  }
+
+  /**
+   * Self-revoke a DEPIN asset held by this wallet.
+   *
+   * No hace falta el token owner: la prueba de titularidad es gastar la propia
+   * UTXO del asset, que vuelve a su dirección con la marca de revocación.
+   * Sólo el owner puede deshacerlo con `unfreezeAddresses`.
+   *
+   * @param {object} params - Parámetros
+   * @param {string} params.assetName - Asset DEPIN (&NAME)
+   * @param {string} [params.holderAddress] - Dirección que renuncia; por
+   *   defecto, la que tiene la UTXO del asset
+   * @returns {Promise<object>} Transaction data
+   */
+  async selfRevokeDepin(params) {
+    const builder = new DepinSelfRevokeBuilder(this.rpc, this._buildParams(params));
+    return await builder.build();
+  }
+
+  /**
+   * List DEPIN addresses that have revealed a public key on chain.
+   *
+   * Es la lista que la mensajería DePIN necesita: sólo puede participar quien
+   * ha revelado su clave pública. Distinta de `listDepinHolders`, que lista a
+   * todos los titulares con su validez.
+   *
+   * @param {string} assetName - Asset DEPIN (&NAME)
+   * @param {number} [count] - Máximo de resultados
+   * @param {number} [start] - Desplazamiento
+   * @returns {Promise<Array<{address: string, pubkey: string}>>} Direcciones
+   */
+  async listDepinAddresses(assetName, count, start) {
+    return await this.queries.listDepinAddresses(assetName, count, start);
   }
 
   /**

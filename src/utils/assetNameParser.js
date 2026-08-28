@@ -28,10 +28,15 @@ class AssetNameParser {
       // QUALIFIER or SUB_QUALIFIER: #NAME or #ROOT/SUB
       if (cleanName.includes('/')) {
         type = AssetType.SUB_QUALIFIER;
-        const withoutHash = cleanName.substring(1);
-        const parts = withoutHash.split('/');
-        parent = '#' + parts[0];
-        subName = parts[1];
+    // El padre es el INMEDIATO, no la raíz: el dueño de "A/B/C" es "A/B!".
+    // El nodo lo resuelve con find_last_of (assets.cpp GetParentName, misma
+    // rama para SUB y DEPIN). Partir por el primer '/' devolvía "A", así que
+    // toda emisión de tercer nivel buscaba el token owner equivocado y el nodo
+    // la rechazaba con «Trying to create outpoint for asset that you don't
+    // have».
+        const slash = cleanName.lastIndexOf('/');
+        parent = cleanName.slice(0, slash);
+        subName = cleanName.slice(slash + 1);
         prefix = '#';
       } else {
         type = AssetType.QUALIFIER;
@@ -46,9 +51,9 @@ class AssetNameParser {
       type = AssetType.DEPIN;
       prefix = '&';
       if (cleanName.includes('/')) {
-        const parts = cleanName.split('/');
-        parent = parts[0];
-        subName = parts.slice(1).join('/');
+        const slash = cleanName.lastIndexOf('/');
+        parent = cleanName.slice(0, slash);
+        subName = cleanName.slice(slash + 1);
       }
     } else if (cleanName.includes('#')) {
       // UNIQUE: ROOT#TAG
@@ -59,9 +64,9 @@ class AssetNameParser {
     } else if (cleanName.includes('/')) {
       // SUB: ROOT/SUB
       type = AssetType.SUB;
-      const parts = cleanName.split('/');
-      parent = parts[0];
-      subName = parts[1];
+      const slash = cleanName.lastIndexOf('/');
+      parent = cleanName.slice(0, slash);
+      subName = cleanName.slice(slash + 1);
     } else {
       // ROOT
       type = AssetType.ROOT;

@@ -389,6 +389,50 @@ class AssetQueries {
   }
 
   /**
+   * List DEPIN addresses that have revealed a public key on chain.
+   *
+   * Sólo quien ha revelado su clave pública puede participar en la mensajería
+   * DePIN, así que esta lista es un subconjunto de `listDepinHolders` y no
+   * sustituye a aquella: no dice nada sobre validez ni cantidades.
+   *
+   * @param {string} assetName - DEPIN asset name
+   * @param {number} [count] - Máximo de resultados (el nodo topa en 50000)
+   * @param {number} [start] - Desplazamiento
+   * @returns {Promise<Array<{address: string, pubkey: string}>>} Direcciones
+   */
+  async listDepinAddresses(assetName, count, start) {
+    if (!assetName) {
+      throw new Error('DEPIN asset name is required');
+    }
+
+    const params = [assetName];
+    if (count !== undefined) params.push(count);
+    if (start !== undefined) params.push(start);
+
+    try {
+      const result = await this.rpc('listdepinaddresses', params);
+      return result || [];
+    } catch (error) {
+      if (rpcErrorMessage(error).includes('not found')) {
+        throw new AssetNotFoundError(
+          `DEPIN asset ${assetName} not found on blockchain`,
+          assetName
+        );
+      }
+      const message = rpcErrorMessage(error);
+      // El nodo necesita un índice aparte para esto y su aviso es fácil de
+      // perder dentro de un «Failed to…» genérico: se conserva entero.
+      if (message.includes('pubkeyindex')) {
+        throw new Error(
+          `listdepinaddresses needs the node running with -pubkeyindex (and a reindex). ` +
+          `Node said: ${message}`
+        );
+      }
+      throw new Error(`Failed to list DEPIN addresses: ${message}`);
+    }
+  }
+
+  /**
    * List DEPIN holders with validity status
    * @param {string} assetName - DEPIN asset name
    * @returns {Promise<Array>} Array of holder objects
