@@ -262,7 +262,7 @@ export type CreateTransactionOperationType = CreateTransactionBuild['operationTy
 
 export interface NeuraiAssetsBuildResult {
   rawTx: string;
-  fee: number;
+  fee: number | string;
   burnAmount: number;
   network: string;
   buildStrategy: BuildStrategy;

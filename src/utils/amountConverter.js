@@ -1,3 +1,4 @@
+const { assetAmountToRaw } = require('./assetAmount');
 /**
  * Amount Converter
  * Converts between user amounts and satoshis (protocol internal format)
@@ -25,6 +26,7 @@ class AmountConverter {
     // Convert to satoshis and round to avoid floating point issues
     const satoshis = Math.round(amount * multiplier);
 
+    if (!Number.isSafeInteger(satoshis)) throw new Error('Unsafe raw amount; use assetAmountToRaw with decimal text');
     return satoshis;
   }
 
@@ -35,7 +37,7 @@ class AmountConverter {
    * @returns {number} User-friendly amount
    */
   static fromSatoshis(satoshis, units) {
-    if (typeof satoshis !== 'number' || isNaN(satoshis)) {
+    if (typeof satoshis !== 'number' || !Number.isSafeInteger(satoshis)) {
       throw new Error('Satoshis must be a valid number');
     }
 
@@ -72,7 +74,10 @@ class AmountConverter {
    * @returns {number} Parsed amount
    */
   static parse(formattedAmount) {
-    const num = parseFloat(formattedAmount);
+    let raw;
+    try { raw = assetAmountToRaw(formattedAmount); } catch { throw new Error('Invalid number format'); }
+    if (raw > BigInt(Number.MAX_SAFE_INTEGER) && raw % 100000000n !== 0n) throw new Error('Unsafe display number; retain decimal text');
+    const num = Number(formattedAmount);
     if (isNaN(num)) {
       throw new Error('Invalid number format');
     }
@@ -108,7 +113,7 @@ class AmountConverter {
 
     // Round to units decimal places
     const multiplier = Math.pow(10, units);
-    return Math.round(amount * multiplier) / multiplier;
+    return this.toSatoshis(amount, units) / multiplier;
   }
 }
 

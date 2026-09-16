@@ -207,23 +207,18 @@ describe('assetAmountToRaw', () => {
   });
 
   describe('differential test against create-transaction assetUnitsToRaw', () => {
-    // Guards the plan's requirement that a future "simplification" cannot
-    // swap the strict helper for the upstream one. The upstream helper is
-    // `BigInt(Math.round(value * 1e8))`, which is correct for ordinary
-    // magnitudes; these are its two real, silent failure modes.
-    it('disagrees past MAX_SAFE_INTEGER, where the product drops bits', () => {
-      const strict = assetAmountToRaw('184467440.73709551');
-      const upstream = assetUnitsToRaw(184467440.73709551);
-      expect(strict).to.equal(18446744073709551n);
-      expect(upstream).to.equal(18446744073709552n); // one unit off, silently
+    // The constructor now shares the exact decimal contract.
+    it('agrees on large decimal strings and rejects ambiguous numbers', () => {
+      expect(assetAmountToRaw('184467440.73709551')).to.equal(18446744073709551n);
+      expect(assetUnitsToRaw('184467440.73709551')).to.equal(18446744073709551n);
+      expect(() => assetUnitsToRaw(184467440.73709551)).to.throw();
     });
 
-    it('rejects what assetUnitsToRaw silently rounds away', () => {
-      expect(assetUnitsToRaw(0.000000001)).to.equal(0n); // a whole amount vanishes
-      expect(() => assetAmountToRaw(0.000000001)).to.throw(/at most 8/);
-
-      expect(assetUnitsToRaw(1.123456789)).to.equal(112345679n); // 9th decimal folded in
-      expect(() => assetAmountToRaw(1.123456789)).to.throw(/9 decimals/);
+    it('both helpers reject sub-satoshi amounts instead of rounding', () => {
+      for (const value of [0.000000001, 1.123456789]) {
+        expect(() => assetUnitsToRaw(value)).to.throw();
+        expect(() => assetAmountToRaw(value)).to.throw();
+      }
     });
 
     it('agrees on small, exactly representable values', () => {

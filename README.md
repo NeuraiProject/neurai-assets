@@ -1089,3 +1089,14 @@ The estimator assumes the most common spend layout for every input:
 - PQ inputs → AuthScript v1 with the **default** `OP_TRUE` `witnessScript` and **no** `functionalArgs`
 
 That covers all standard asset operations. If you build transactions whose PQ inputs use covenant `witnessScript`s, NoAuth (`authType=0x00`) or Legacy AuthScript (`authType=0x02`) witnesses, compute the witness size yourself and add it to the result of `estimateTransactionVbytes` (or use `estimateVirtualSize` from `@neuraiproject/neurai-sign-transaction` after building the raw transaction, which fills dummy witnesses of the worst-case size and returns the exact post-signing vsize).
+
+### Large amounts and exact result envelopes
+
+Pass large fractional quantities as decimal strings and RPC raw `satoshis` as
+bigint or integer strings. Build envelopes retain numeric display fields for
+safe monetary values; large fractional values are returned as decimal strings
+instead of rounding or preventing a valid build. Consumers must accept both.
+Canonical `createTransactionBuild` quantities and changes remain bigint.
+XNA string outputs are preserved during output ordering. Exact selection totals
+remain available as `totalSats` / raw methods; never use a rounded display value
+as a new transaction input.

@@ -127,7 +127,7 @@ class DepinSelfRevokeBuilder extends BaseAssetTransactionBuilder {
       outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
     }
     outputs.push({
-      [holderAddress]: OutputFormatter.formatTransferOutput(assetName, Number(amountRaw))
+      [holderAddress]: OutputFormatter.formatTransferOutput(assetName, this.satsToDisplay(amountRaw))
     });
     outputs.push({
       [holderAddress]: OutputFormatter.formatFreezeAddressesOutput({

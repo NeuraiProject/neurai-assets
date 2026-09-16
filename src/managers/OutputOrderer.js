@@ -60,7 +60,7 @@ class OutputOrderer {
     const assetOutputs = [];
 
     for (const { address, value } of pairs) {
-      if (typeof value === 'number') {
+      if ((typeof value === 'number' || typeof value === 'string')) {
         xnaOutputs.push({ address, value });
       } else if (typeof value === 'object') {
         if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
@@ -112,7 +112,7 @@ class OutputOrderer {
     for (const [address, value] of entries) {
       let category;
 
-      if (typeof value === 'number') {
+      if ((typeof value === 'number' || typeof value === 'string')) {
         category = 1; // XNA
       } else if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
         category = 2; // Owner token
@@ -140,7 +140,7 @@ class OutputOrderer {
    * @returns {string} Category name
    */
   getOutputCategory(value) {
-    if (typeof value === 'number') {
+    if ((typeof value === 'number' || typeof value === 'string')) {
       return 'XNA';
     } else if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
       return 'OWNER_TOKEN';
@@ -192,7 +192,7 @@ class OutputOrderer {
       const category = this.getOutputCategory(value);
       let order;
 
-      if (typeof value === 'number') {
+      if ((typeof value === 'number' || typeof value === 'string')) {
         order = 1;
       } else if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
         order = 2;

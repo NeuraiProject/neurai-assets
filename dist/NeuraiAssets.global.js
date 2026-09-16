@@ -938,6 +938,64 @@ var NeuraiAssetsBundle = (function (exports) {
 		if (hasRequiredDist_1) return dist;
 		hasRequiredDist_1 = 1;
 
+		/** Exact monetary primitives. This module has no runtime dependencies. */
+		const SATS_PER_XNA = 100000000n;
+		const MAX_MONEY = 2100000000000000000n;
+		/** Normalize a raw integer without preserving an already rounded number. */
+		function toRawInteger(value, label = 'amount') {
+		    if (typeof value === 'bigint')
+		        return value;
+		    if (typeof value === 'number' && Number.isSafeInteger(value))
+		        return BigInt(value);
+		    if (typeof value === 'string' && /^-?\d+$/.test(value) && value.length <= 100)
+		        return BigInt(value);
+		    throw new Error(`${label}: expected an exact integer; use bigint or an integer string for large values`);
+		}
+		function assertMoneyRange(value, label = 'amount') {
+		    const raw = toRawInteger(value, label);
+		    if (raw < 0n || raw > MAX_MONEY)
+		        throw new Error(`${label} outside Neurai monetary range`);
+		    return raw;
+		}
+		/** Parse decimal units exactly, including scientific notation, with at most 8 decimals. */
+		function decimalToSatoshis(value) {
+		    if (typeof value !== 'string' && typeof value !== 'number')
+		        throw new Error('Expected decimal string or number');
+		    if (typeof value === 'number' && !Number.isFinite(value))
+		        throw new Error('Amount must be finite');
+		    const text = String(value);
+		    if (text.length > 100)
+		        throw new Error('Amount too long');
+		    const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
+		    if (!match)
+		        throw new Error('Invalid decimal amount');
+		    const exponent = Number(match[4] ?? 0);
+		    if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 100)
+		        throw new Error('Invalid decimal exponent');
+		    const fraction = match[3] ?? '';
+		    const shift = 8 + exponent - fraction.length;
+		    let raw = BigInt(match[2] + fraction);
+		    if (shift >= 0)
+		        raw *= 10n ** BigInt(shift);
+		    else {
+		        const divisor = 10n ** BigInt(-shift);
+		        if (raw % divisor !== 0n)
+		            throw new Error('Amount has more than 8 decimals');
+		        raw /= divisor;
+		    }
+		    if (typeof value === 'number' && raw > BigInt(Number.MAX_SAFE_INTEGER) && !Number.isSafeInteger(value)) {
+		        throw new Error('Large fractional amounts must be supplied as decimal strings');
+		    }
+		    return match[1] ? -raw : raw;
+		}
+		/** Format signed raw units without converting to floating point. */
+		function satoshisToDecimal(value) {
+		    const raw = toRawInteger(value);
+		    const abs = raw < 0n ? -raw : raw;
+		    const fraction = (abs % SATS_PER_XNA).toString().padStart(8, '0').replace(/0+$/, '');
+		    return `${raw < 0n ? '-' : ''}${abs / SATS_PER_XNA}${fraction ? '.' + fraction : ''}`;
+		}
+
 		function ensureHex(hex, label = 'hex') {
 		    const normalized = String(hex || '').trim().toLowerCase();
 		    if (!/^[0-9a-f]*$/.test(normalized) || normalized.length % 2 !== 0) {
@@ -986,7 +1044,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return out;
 		}
 		function u64LE(value) {
-		    const bigintValue = typeof value === 'bigint' ? value : BigInt(value);
+		    const bigintValue = toRawInteger(value);
 		    if (bigintValue < 0n || bigintValue > 0xffffffffffffffffn) {
 		        throw new Error(`uint64 out of range: ${bigintValue}`);
 		    }
@@ -999,7 +1057,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return out;
 		}
 		function i64LE(value) {
-		    const bigintValue = typeof value === 'bigint' ? value : BigInt(value);
+		    const bigintValue = toRawInteger(value);
 		    if (bigintValue < -0x8000000000000000n || bigintValue > 0x7fffffffffffffffn) {
 		        throw new Error(`int64 out of range: ${bigintValue}`);
 		    }
@@ -1009,7 +1067,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return out;
 		}
 		function compactSize(value) {
-		    const bigintValue = typeof value === 'bigint' ? value : BigInt(value);
+		    const bigintValue = toRawInteger(value);
 		    if (bigintValue < 0n)
 		        throw new Error('CompactSize cannot encode negative numbers');
 		    if (bigintValue < 253n) {
@@ -2053,7 +2111,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return BURN_COSTS_XNA[operation] * multiplier;
 		}
 		function getBurnAmountSats(operation, multiplier = 1) {
-		    return BigInt(Math.round(getBurnAmountXna(operation, multiplier) * 1e8));
+		    return assertMoneyRange(decimalToSatoshis(BURN_COSTS_XNA[operation]) * assertMoneyRange(toRawInteger(multiplier, 'burn multiplier')));
 		}
 		function inferNetworkFromAnyAddress(address) {
 		    return inferNetworkFromAddress(address);
@@ -2116,7 +2174,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		}
 
 		function xnaToSatoshis(amount) {
-		    return BigInt(Math.round(Number(amount || 0) * 1e8));
+		    return assertMoneyRange(decimalToSatoshis(amount));
 		}
 		function assetUnitsToRaw(amount) {
 		    return xnaToSatoshis(amount);
@@ -2125,12 +2183,12 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const payload = [
 		        assetPayloadPrefix(options?.assetMarker, 'transfer'),
 		        serializeString(assetName),
-		        u64LE(amountRaw)
+		        u64LE(assertMoneyRange(amountRaw))
 		    ];
 		    const encodedMessage = encodeAssetDataReference(message);
 		    if (encodedMessage.length > 0) {
 		        payload.push(encodedMessage);
-		        if (expireTime !== undefined && BigInt(expireTime) !== 0n) {
+		        if (expireTime !== undefined && toRawInteger(expireTime) !== 0n) {
 		            payload.push(i64LE(expireTime));
 		        }
 		    }
@@ -2197,7 +2255,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		}
 		function encodeNewAssetPayload(assetName, quantityRaw, units = 0, reissuable = true, ipfsHash, options) {
 		    const encodedIpfs = encodeAssetDataReference(ipfsHash);
-		    return concatBytes(assetPayloadPrefix(options?.assetMarker, 'new'), serializeString(assetName), u64LE(quantityRaw), Uint8Array.of(units & 0xff, reissuable ? 1 : 0, encodedIpfs.length > 0 ? 1 : 0), encodedIpfs);
+		    return concatBytes(assetPayloadPrefix(options?.assetMarker, 'new'), serializeString(assetName), u64LE(assertMoneyRange(quantityRaw)), Uint8Array.of(units & 0xff, reissuable ? 1 : 0, encodedIpfs.length > 0 ? 1 : 0), encodedIpfs);
 		}
 		function encodeNewAssetScript(address, assetName, quantityRaw, units = 0, reissuable = true, ipfsHash, options) {
 		    return concatBytes(encodeDestinationScript(address), Uint8Array.of(OP_XNA_ASSET), pushData(encodeNewAssetPayload(assetName, quantityRaw, units, reissuable, ipfsHash, options)), Uint8Array.of(OP_DROP));
@@ -2241,7 +2299,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return resolved & 0xff;
 		}
 		function encodeReissueAssetPayload(assetName, quantityRaw, units, reissuable = true, ipfsHash, options) {
-		    return concatBytes(assetPayloadPrefix(options?.assetMarker, 'reissue'), serializeString(assetName), u64LE(quantityRaw), Uint8Array.of(reissueUnitsByte(units), reissuable ? 1 : 0), encodeAssetDataReference(ipfsHash));
+		    return concatBytes(assetPayloadPrefix(options?.assetMarker, 'reissue'), serializeString(assetName), u64LE(assertMoneyRange(quantityRaw)), Uint8Array.of(reissueUnitsByte(units), reissuable ? 1 : 0), encodeAssetDataReference(ipfsHash));
 		}
 		function encodeReissueAssetScript(address, assetName, quantityRaw, units, reissuable = true, ipfsHash, options) {
 		    return concatBytes(encodeDestinationScript(address), Uint8Array.of(OP_XNA_ASSET), pushData(encodeReissueAssetPayload(assetName, quantityRaw, units, reissuable, ipfsHash, options)), Uint8Array.of(OP_DROP));
@@ -2270,7 +2328,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		}
 		function createXnaOutput(address, valueSats) {
 		    return {
-		        valueSats: typeof valueSats === 'bigint' ? valueSats : BigInt(valueSats),
+		        valueSats: assertMoneyRange(valueSats),
 		        scriptPubKeyHex: bytesToHex(encodeDestinationScript(address))
 		    };
 		}
@@ -2366,6 +2424,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return concatBytes(u64LE(output.valueSats), compactSize(scriptPubKey.length), scriptPubKey);
 		}
 		function createUnsignedTransaction(tx) {
+		    let total = 0n;
+		    for (const output of tx.outputs)
+		        total += assertMoneyRange(output.valueSats, 'output');
+		    assertMoneyRange(total, 'total outputs');
 		    const version = tx.version ?? 2;
 		    const locktime = tx.locktime ?? 0;
 		    const inputs = tx.inputs.map(serializeInput);
@@ -2386,10 +2448,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    };
 		}
 		function appendXnaEnvelope(outputs, burnAddress, burnAmountSats, changeAddress, changeSats) {
-		    if (burnAddress && burnAmountSats !== undefined && BigInt(burnAmountSats) > 0n) {
+		    if (burnAddress && burnAmountSats !== undefined && toRawInteger(burnAmountSats) > 0n) {
 		        outputs.push(createXnaOutput(burnAddress, burnAmountSats));
 		    }
-		    if (changeAddress && changeSats !== undefined && BigInt(changeSats) > 0n) {
+		    if (changeAddress && changeSats !== undefined && toRawInteger(changeSats) > 0n) {
 		        outputs.push(createXnaOutput(changeAddress, changeSats));
 		    }
 		}
@@ -2507,7 +2569,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		function createIssueDepinTransaction(params) {
 		    assertDepinAssetName(params.assetName);
 		    assertDepinNetwork(params.network);
-		    if (BigInt(params.quantityRaw) <= 0n) {
+		    if (toRawInteger(params.quantityRaw) <= 0n) {
 		        throw new Error('DEPIN issue quantity must be positive');
 		    }
 		    if (params.reissuable !== undefined && typeof params.reissuable !== 'boolean') {
@@ -2544,7 +2606,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		        if (transfer.assetName !== assetName) {
 		            throw new Error(`DEPIN transfers must all move the same asset (got ${transfer.assetName} and ${assetName}); build one transaction per DEPIN asset`);
 		        }
-		        if (BigInt(transfer.amountRaw) <= 0n) {
+		        if (toRawInteger(transfer.amountRaw) <= 0n) {
 		            throw new Error(`DEPIN transfer amount must be positive: ${assetName}`);
 		        }
 		    }
@@ -2562,7 +2624,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		function createDepinSelfRevokeTransaction(params) {
 		    assertDepinAssetName(params.assetName);
 		    assertDepinNetwork(params.network);
-		    if (BigInt(params.amountRaw) <= 0n) {
+		    if (toRawInteger(params.amountRaw) <= 0n) {
 		        throw new Error('DEPIN self-revoke amount must be positive');
 		    }
 		    // Exact consensus pattern: one self-transfer of "&X" back to the holder plus
@@ -3520,13 +3582,16 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		dist.DEFAULT_ASSET_MARKER = DEFAULT_ASSET_MARKER;
 		dist.DEPIN_MAX_NAME_LENGTH = DEPIN_MAX_NAME_LENGTH;
+		dist.MAX_MONEY = MAX_MONEY;
 		dist.OWNER_ASSET_AMOUNT = OWNER_ASSET_AMOUNT;
 		dist.REGTEST_GLOBAL_BURN_ADDRESS = REGTEST_GLOBAL_BURN_ADDRESS;
+		dist.SATS_PER_XNA = SATS_PER_XNA;
 		dist.UNIQUE_ASSETS_REISSUABLE = UNIQUE_ASSETS_REISSUABLE;
 		dist.UNIQUE_ASSET_AMOUNT = UNIQUE_ASSET_AMOUNT;
 		dist.UNIQUE_ASSET_UNITS = UNIQUE_ASSET_UNITS;
 		dist.assertDepinAssetName = assertDepinAssetName;
 		dist.assertDepinNetwork = assertDepinNetwork;
+		dist.assertMoneyRange = assertMoneyRange;
 		dist.assetPayloadPrefix = assetPayloadPrefix;
 		dist.assetUnitsToRaw = assetUnitsToRaw;
 		dist.computeTxid = computeTxid;
@@ -3561,6 +3626,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.createUnsignedTransaction = createUnsignedTransaction;
 		dist.createVerifierStringOutput = createVerifierStringOutput;
 		dist.createXnaOutput = createXnaOutput;
+		dist.decimalToSatoshis = decimalToSatoshis;
 		dist.decodeAddress = decodeAddress;
 		dist.decodeAssetDataReferenceHex = decodeAssetDataReferenceHex;
 		dist.encodeAssetDataReference = encodeAssetDataReference;
@@ -3603,9 +3669,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.parseTransaction = parseTransaction;
 		dist.resolveAddressInput = resolveAddressInput;
 		dist.resolveAssetMarker = resolveAssetMarker;
+		dist.satoshisToDecimal = satoshisToDecimal;
 		dist.serializeInput = serializeInput;
 		dist.serializeOutput = serializeOutput;
 		dist.serializeTransaction = serializeTransaction;
+		dist.toRawInteger = toRawInteger;
 		dist.xnaToSatoshis = xnaToSatoshis;
 		
 		return dist;
@@ -4590,9 +4658,455 @@ var NeuraiAssetsBundle = (function (exports) {
 	}
 
 	/**
-	 * Amount Converter
-	 * Converts between user amounts and satoshis (protocol internal format)
+	 * Exact amount conversion for the canonical createTransactionBuild contract.
+	 *
+	 * Everything the chain encodes in a transaction is an integer:
+	 *   - XNA values are 10^8 sats;
+	 *   - asset payload quantities are ALSO 10^8-scaled, independently of the
+	 *     asset's `units`. `units` limits divisibility and presentation, it is
+	 *     never a multiplier (see the node's CheckAmountWithUnits in assets.cpp).
+	 *
+	 * The display <-> raw conversion is therefore a fixed 10^8 scaling, done
+	 * **through text**: scaling the decimal string keeps every digit the caller
+	 * wrote, and refuses the ones it cannot keep.
+	 *
+	 * The alternative — `BigInt(Math.round(value * 1e8))`, which is what
+	 * `assetUnitsToRaw` in neurai-create-transaction does — is correct for
+	 * ordinary magnitudes. `4.35 * 1e8` is `434999999.99999994`, but `Math.round`
+	 * recovers `435000000`; that example shows binary representation, not a wrong
+	 * result. For a finite, non-negative number it has two silent failure modes:
+	 *
+	 *   - more than eight decimals are rounded away instead of rejected, so an
+	 *     amount can vanish (`1e-9` becomes `0n`) or shift (`1.123456789` becomes
+	 *     `112345679`);
+	 *   - past `Number.MAX_SAFE_INTEGER` a double can no longer represent every
+	 *     integer, so the product may or may not survive — and nothing says which.
+	 *     `184467440.73709551` comes back as `18446744073709552n`, one unit off,
+	 *     while `21000000000` scales to `2100000000000000000n` exactly. The risk
+	 *     is that the two cases are indistinguishable from the outside.
+	 *
+	 * Outside that range its `Number(amount || 0)` also turns `NaN`, `null` and
+	 * `''` into `0n`, accepts negatives, and coerces other types — `true` yields a
+	 * whole unit. Every one of these is reachable with values a wallet can hold,
+	 * and none announces itself. Hence: convert by text, validate, and fail closed
+	 * rather than delegate.
 	 */
+
+	var assetAmount;
+	var hasRequiredAssetAmount;
+
+	function requireAssetAmount () {
+		if (hasRequiredAssetAmount) return assetAmount;
+		hasRequiredAssetAmount = 1;
+		const { InvalidAmountError, InvalidUnitsError } = requireErrors();
+
+		/** Asset payload and XNA values are both encoded with 8 decimals. */
+		const PROTOCOL_DECIMALS = 8;
+
+		/** 10^8, as a bigint, for callers that need the scale itself. */
+		const PROTOCOL_SCALE = 100000000n;
+
+		/**
+		 * Consensus ceiling for any CAmount, asset payloads included:
+		 * `MAX_MONEY = 21000000000 * COIN` in the node's `src/amount.h`, with
+		 * `MoneyRange(v)` requiring `0 <= v <= MAX_MONEY`.
+		 *
+		 * Enforced here rather than left to the callers because it is a property of
+		 * the value, not of the operation: a string is not exempt just because it
+		 * carried its digits faithfully.
+		 */
+		const MAX_MONEY_RAW = 2100000000000000000n;
+
+		const PLAIN_DECIMAL = /^-?\d+(\.\d+)?$/;
+		const SCIENTIFIC_DECIMAL = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/;
+
+		/**
+		 * Expand a scientific-notation decimal ("1e-7", "2.1e+19") into plain decimal
+		 * text. Returns the input unchanged when it carries no exponent.
+		 *
+		 * @param {string} text - Decimal text, possibly with an exponent
+		 * @returns {string} Plain decimal text
+		 */
+		function expandScientificNotation(text) {
+		  const match = SCIENTIFIC_DECIMAL.exec(text);
+		  if (!match) {
+		    return text;
+		  }
+
+		  const [, sign, intPart, fracPart = '', exponentText] = match;
+		  const digits = intPart + fracPart;
+		  const pointPosition = intPart.length + Number.parseInt(exponentText, 10);
+
+		  let expanded;
+		  if (pointPosition <= 0) {
+		    expanded = `0.${'0'.repeat(-pointPosition)}${digits}`;
+		  } else if (pointPosition >= digits.length) {
+		    expanded = digits + '0'.repeat(pointPosition - digits.length);
+		  } else {
+		    expanded = `${digits.slice(0, pointPosition)}.${digits.slice(pointPosition)}`;
+		  }
+
+		  return sign + expanded;
+		}
+
+		/**
+		 * Normalize a public amount into canonical plain decimal text.
+		 *
+		 * Strings must already be plain decimals: a caller that writes "1e3" is more
+		 * likely to have a bug than to mean 1000, and there is no reason to guess.
+		 * Numbers are accepted through their shortest round-trip representation
+		 * (`String(0.1)` is `"0.1"`, not the exact binary expansion), then expanded,
+		 * which is the only reading under which a literal like `1e-7` is meaningful.
+		 *
+		 * @param {string|number} value - Public amount
+		 * @param {string} label - What is being converted, for the error message
+		 * @returns {string} Plain decimal text
+		 * @throws {InvalidAmountError} If the value cannot be read exactly
+		 */
+		function normalizeDecimalText(value, label) {
+		  if (typeof value === 'bigint') {
+		    throw new InvalidAmountError(
+		      `${label}: a bigint is ambiguous as a display amount (is 5n five tokens ` +
+		      `or five raw units?). Pass a decimal string such as "5", or set the ` +
+		      `*Raw / *Sats field directly when you already hold protocol integers.`,
+		      value
+		    );
+		  }
+
+		  if (typeof value === 'number') {
+		    if (!Number.isFinite(value)) {
+		      throw new InvalidAmountError(`${label}: ${value} is not a finite number`, value);
+		    }
+		    return expandScientificNotation(String(value));
+		  }
+
+		  if (typeof value === 'string') {
+		    const text = value.trim();
+		    if (text === '') {
+		      throw new InvalidAmountError(`${label}: empty string is not an amount`, value);
+		    }
+		    if (SCIENTIFIC_DECIMAL.test(text)) {
+		      throw new InvalidAmountError(
+		        `${label}: "${text}" uses exponent notation. Pass a plain decimal ` +
+		        `string (for example "${expandScientificNotation(text)}") so the ` +
+		        `intended value is unambiguous.`,
+		        value
+		      );
+		    }
+		    if (!PLAIN_DECIMAL.test(text)) {
+		      throw new InvalidAmountError(`${label}: "${text}" is not a decimal number`, value);
+		    }
+		    return text;
+		  }
+
+		  throw new InvalidAmountError(
+		    `${label}: expected a decimal string or a number, received ${value === null ? 'null' : typeof value}`,
+		    value
+		  );
+		}
+
+		/**
+		 * Scale plain decimal text by 10^decimals, exactly, using text only.
+		 *
+		 * `rounding: 'ceil'` exists for one purpose: a *threshold* — a fee or a
+		 * funding requirement — computed by float arithmetic upstream, which can
+		 * carry noise digits below the satoshi (`0.031275000000000004`). Rounding it
+		 * up asks for slightly more than needed, which is safe; rounding a value that
+		 * will be *encoded* would silently create money, so the default is to reject.
+		 *
+		 * @param {string} text - Plain decimal text
+		 * @param {number} decimals - Number of decimals of the target scale
+		 * @param {string} label - What is being converted, for the error message
+		 * @param {'exact'|'ceil'} [rounding] - How to treat excess precision
+		 * @returns {bigint} Scaled integer
+		 * @throws {InvalidAmountError} If the value carries more decimals than the scale
+		 */
+		function scaleDecimalText(text, decimals, label, rounding = 'exact') {
+		  const negative = text.startsWith('-');
+		  const unsigned = negative ? text.slice(1) : text;
+		  const [intPart, fracPart = ''] = unsigned.split('.');
+
+		  if (fracPart.length > decimals) {
+		    if (rounding !== 'ceil') {
+		      throw new InvalidAmountError(
+		        `${label}: "${text}" has ${fracPart.length} decimals; the protocol ` +
+		        `encodes at most ${decimals}. The extra digits would be silently ` +
+		        `dropped, so this is rejected instead of rounded.`,
+		        text
+		      );
+		    }
+		    if (negative) {
+		      throw new InvalidAmountError(
+		        `${label}: "${text}" is negative; rounding up a negative threshold is not meaningful`,
+		        text
+		      );
+		    }
+		    const kept = BigInt(intPart + fracPart.slice(0, decimals));
+		    const dropped = fracPart.slice(decimals);
+		    return /[1-9]/.test(dropped) ? kept + 1n : kept;
+		  }
+
+		  const scaled = BigInt(intPart + fracPart.padEnd(decimals, '0'));
+		  return negative ? -scaled : scaled;
+		}
+
+		/**
+		 * Refuse a `number` whose scaled value no longer fits a safe integer.
+		 *
+		 * Above `MAX_SAFE_INTEGER / 1e8` (~90071992.55) a double can no longer name
+		 * every 8-decimal value, so the shortest round-trip form this module reads is
+		 * not necessarily the decimal the caller meant. The two paths then disagree:
+		 *
+		 *   assetAmountToRaw(184467440.73709551)   → 18446744073709550n
+		 *   assetAmountToRaw('184467440.73709551') → 18446744073709551n
+		 *
+		 * because `String(184467440.73709551)` is `'184467440.7370955'` — one digit
+		 * shorter. Neither answer is wrong for the double that arrived; the problem is
+		 * that the intended decimal was already lost at the call site. Asking for a
+		 * string is the only way to get it back, so this fails closed instead of
+		 * picking one. Strings are never restricted.
+		 *
+		 * A number that is itself a safe integer is still accepted, however large it
+		 * scales: it names its value exactly and has no fractional digits to lose, so
+		 * `21000000000` — the documented maximum supply — keeps working. What is
+		 * refused is a number that is neither a safe integer nor small enough for its
+		 * eight decimals to be unambiguous.
+		 *
+		 * @param {string|number} value - The original input
+		 * @param {bigint} raw - Scaled result
+		 * @param {string} text - Normalized decimal text
+		 * @param {string} label - Prefix for error messages
+		 * @throws {InvalidAmountError} If a number cannot carry the value exactly
+		 */
+		function assertNumberCarriedItExactly(value, raw, text, label) {
+		  if (typeof value !== 'number') {
+		    return;
+		  }
+		  if (raw <= BigInt(Number.MAX_SAFE_INTEGER) || Number.isSafeInteger(value)) {
+		    return;
+		  }
+		  throw new InvalidAmountError(
+		    `${label}: ${text} scales to ${raw}, past Number.MAX_SAFE_INTEGER, and the ` +
+		    `number that arrived can no longer name every 8-decimal value at that ` +
+		    `magnitude — it may already differ from the amount intended. Pass it as a ` +
+		    `decimal string ("${text}") instead.`,
+		    value
+		  );
+		}
+
+		/**
+		 * Convert a user-facing asset amount into the raw 10^8-scaled integer that
+		 * goes into the asset payload.
+		 *
+		 * @param {string|number} value - Display amount (e.g. "1.25")
+		 * @param {number} [units] - Asset decimal places; when given, divisibility is enforced
+		 * @param {object} [options]
+		 * @param {string} [options.label] - Prefix for error messages
+		 * @returns {bigint} Raw amount, 10^8-scaled
+		 * @throws {InvalidAmountError|InvalidUnitsError} If the amount cannot be encoded
+		 */
+		function assetAmountToRaw(value, units, options = {}) {
+		  const label = options.label || 'asset amount';
+		  const text = normalizeDecimalText(value, label);
+		  const raw = scaleDecimalText(text, PROTOCOL_DECIMALS, label);
+
+		  if (raw < 0n) {
+		    throw new InvalidAmountError(`${label}: "${text}" is negative`, value);
+		  }
+
+		  assertNumberCarriedItExactly(value, raw, text, label);
+
+		  if (raw > MAX_MONEY_RAW) {
+		    throw new InvalidAmountError(
+		      `${label}: "${text}" scales to ${raw}, above the consensus ceiling ` +
+		      `MAX_MONEY (${MAX_MONEY_RAW}, i.e. 21000000000 units). The node rejects ` +
+		      `it with MoneyRange, so it is refused here rather than serialized.`,
+		      value
+		    );
+		  }
+
+		  if (units !== undefined && units !== null) {
+		    if (!Number.isInteger(units) || units < 0 || units > PROTOCOL_DECIMALS) {
+		      throw new InvalidUnitsError(
+		        `${label}: units must be an integer between 0 and ${PROTOCOL_DECIMALS}, received ${units}`,
+		        units
+		      );
+		    }
+		    const step = 10n ** BigInt(PROTOCOL_DECIMALS - units);
+		    if (raw % step !== 0n) {
+		      throw new InvalidAmountError(
+		        `${label}: "${text}" is not a multiple of the asset's precision ` +
+		        `(units=${units} allows steps of ${formatRawAsDecimal(step)}). The ` +
+		        `node rejects it with CheckAmountWithUnits.`,
+		        value
+		      );
+		    }
+		  }
+
+		  return raw;
+		}
+
+		/**
+		 * Convert a user-facing XNA amount into satoshis, exactly.
+		 *
+		 * @param {string|number} value - Display XNA amount
+		 * @param {object} [options]
+		 * @param {string} [options.label] - Prefix for error messages
+		 * @param {boolean} [options.allowNegative] - Permit negative results
+		 * @param {'exact'|'ceil'} [options.rounding] - Only for thresholds; see scaleDecimalText
+		 * @returns {bigint} Satoshis
+		 * @throws {InvalidAmountError} If the amount cannot be encoded
+		 */
+		function xnaAmountToSats(value, options = {}) {
+		  const label = options.label || 'XNA amount';
+		  const text = normalizeDecimalText(value, label);
+		  const sats = scaleDecimalText(text, PROTOCOL_DECIMALS, label, options.rounding);
+		  assertNumberCarriedItExactly(value, sats < 0n ? -sats : sats, text, label);
+		  if (!options.allowNegative && sats > MAX_MONEY_RAW) throw new InvalidAmountError(`${label}: exceeds MAX_MONEY`, value);
+
+		  if (sats < 0n && !options.allowNegative) {
+		    throw new InvalidAmountError(`${label}: "${text}" is negative`, value);
+		  }
+
+		  return sats;
+		}
+
+		/**
+		 * Render a protocol integer back as plain decimal text, exactly.
+		 *
+		 * Used for the RPC/legacy envelopes, which speak display amounts. Text keeps
+		 * values above `Number.MAX_SAFE_INTEGER` intact; `toNumber` is the explicit,
+		 * lossy step for the places that still need a JS number.
+		 *
+		 * @param {bigint} raw - Protocol integer (10^8-scaled)
+		 * @returns {string} Plain decimal text without trailing zeros
+		 */
+		function formatRawAsDecimal(raw) {
+		  const negative = raw < 0n;
+		  const digits = (negative ? -raw : raw).toString().padStart(PROTOCOL_DECIMALS + 1, '0');
+		  const intPart = digits.slice(0, digits.length - PROTOCOL_DECIMALS);
+		  const fracPart = digits.slice(digits.length - PROTOCOL_DECIMALS).replace(/0+$/, '');
+		  const text = fracPart === '' ? intPart : `${intPart}.${fracPart}`;
+		  return negative ? `-${text}` : text;
+		}
+
+		/**
+		 * Render a protocol integer as a JS number for the legacy display envelopes.
+		 *
+		 * Fails closed rather than returning a value the caller cannot trust: a
+		 * quantity whose display form is not exactly representable would otherwise
+		 * travel on as a plausible-looking wrong number.
+		 *
+		 * @param {bigint} raw - Protocol integer (10^8-scaled)
+		 * @param {string} [label] - Prefix for error messages
+		 * @returns {number} Display amount
+		 * @throws {InvalidAmountError} If the display value is not exactly representable
+		 */
+		/** Compatibility display: numbers where monetary precision is safe, text otherwise. */
+		function rawToDisplayAmount(raw) {
+		  const value = toProtocolInteger(raw);
+		  const abs = value < 0n ? -value : value;
+		  if (abs <= BigInt(Number.MAX_SAFE_INTEGER) ||
+		      (abs % PROTOCOL_SCALE === 0n && abs / PROTOCOL_SCALE <= BigInt(Number.MAX_SAFE_INTEGER))) {
+		    const text = formatRawAsDecimal(value);
+		    const num = Number(text);
+		    return expandScientificNotation(String(num)) === text ? num : text;
+		  }
+		  return formatRawAsDecimal(value);
+		}
+
+		function rawToDisplayNumber(raw, label = 'amount') {
+		  const text = formatRawAsDecimal(raw);
+		  const asNumber = Number(text);
+		  if (!Number.isFinite(asNumber) || expandScientificNotation(String(asNumber)) !== text) {
+		    throw new InvalidAmountError(
+		      `${label}: ${text} cannot be represented exactly as a JavaScript number. ` +
+		      `Read the raw bigint instead of the display field.`,
+		      text
+		    );
+		  }
+		  return asNumber;
+		}
+
+		/**
+		 * Normalize a chain-reported integer (UTXO `satoshis`, asset balance) to bigint.
+		 *
+		 * A `number` is only accepted when it is a safe integer. An unsafe one is
+		 * rejected rather than converted: `JSON.parse` already destroyed the low bits,
+		 * and `BigInt(9007199254740993)` cannot bring them back — it would just make
+		 * the corruption look deliberate.
+		 *
+		 * @param {bigint|string|number} value - Chain integer
+		 * @param {string} [label] - Prefix for error messages
+		 * @returns {bigint} The same integer, exactly
+		 * @throws {InvalidAmountError} If the value is not an exact integer
+		 */
+		function toProtocolInteger(value, label = 'value') {
+		  if (typeof value === 'bigint') {
+		    return value;
+		  }
+
+		  if (typeof value === 'number') {
+		    if (!Number.isInteger(value)) {
+		      throw new InvalidAmountError(`${label}: ${value} is not an integer`, value);
+		    }
+		    if (!Number.isSafeInteger(value)) {
+		      throw new InvalidAmountError(
+		        `${label}: ${value} exceeds Number.MAX_SAFE_INTEGER, so JSON parsing ` +
+		        `already lost digits. Have the RPC transport deliver this field as a ` +
+		        `string or bigint; converting it here would preserve the corruption.`,
+		        value
+		      );
+		    }
+		    return BigInt(value);
+		  }
+
+		  if (typeof value === 'string') {
+		    const text = value.trim();
+		    if (!/^-?\d+$/.test(text)) {
+		      throw new InvalidAmountError(`${label}: "${value}" is not an integer`, value);
+		    }
+		    return BigInt(text);
+		  }
+
+		  throw new InvalidAmountError(
+		    `${label}: expected an integer as bigint, string or number, received ${value === null ? 'null' : typeof value}`,
+		    value
+		  );
+		}
+
+		/**
+		 * Sum chain-reported integers exactly.
+		 *
+		 * @param {Array<object>} items - Objects carrying the field
+		 * @param {string} [field] - Field name (default: 'satoshis')
+		 * @param {string} [label] - Prefix for error messages
+		 * @returns {bigint} Exact total
+		 */
+		function sumProtocolIntegers(items, field = 'satoshis', label = 'utxo.satoshis') {
+		  return (items || []).reduce(
+		    (total, item) => total + toProtocolInteger(item ? item[field] : undefined, label),
+		    0n
+		  );
+		}
+
+		assetAmount = {
+		  PROTOCOL_DECIMALS,
+		  PROTOCOL_SCALE,
+		  MAX_MONEY_RAW,
+		  assetAmountToRaw,
+		  xnaAmountToSats,
+		  formatRawAsDecimal,
+		  rawToDisplayNumber,
+		  rawToDisplayAmount,
+		  toProtocolInteger,
+		  sumProtocolIntegers,
+		  expandScientificNotation,
+		  normalizeDecimalText,
+		  scaleDecimalText
+		};
+		return assetAmount;
+	}
 
 	var amountConverter;
 	var hasRequiredAmountConverter;
@@ -4600,6 +5114,12 @@ var NeuraiAssetsBundle = (function (exports) {
 	function requireAmountConverter () {
 		if (hasRequiredAmountConverter) return amountConverter;
 		hasRequiredAmountConverter = 1;
+		const { assetAmountToRaw } = requireAssetAmount();
+		/**
+		 * Amount Converter
+		 * Converts between user amounts and satoshis (protocol internal format)
+		 */
+
 		class AmountConverter {
 		  /**
 		   * Convert user amount to satoshis
@@ -4622,6 +5142,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    // Convert to satoshis and round to avoid floating point issues
 		    const satoshis = Math.round(amount * multiplier);
 
+		    if (!Number.isSafeInteger(satoshis)) throw new Error('Unsafe raw amount; use assetAmountToRaw with decimal text');
 		    return satoshis;
 		  }
 
@@ -4632,7 +5153,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {number} User-friendly amount
 		   */
 		  static fromSatoshis(satoshis, units) {
-		    if (typeof satoshis !== 'number' || isNaN(satoshis)) {
+		    if (typeof satoshis !== 'number' || !Number.isSafeInteger(satoshis)) {
 		      throw new Error('Satoshis must be a valid number');
 		    }
 
@@ -4669,7 +5190,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {number} Parsed amount
 		   */
 		  static parse(formattedAmount) {
-		    const num = parseFloat(formattedAmount);
+		    let raw;
+		    try { raw = assetAmountToRaw(formattedAmount); } catch { throw new Error('Invalid number format'); }
+		    if (raw > BigInt(Number.MAX_SAFE_INTEGER) && raw % 100000000n !== 0n) throw new Error('Unsafe display number; retain decimal text');
+		    const num = Number(formattedAmount);
 		    if (isNaN(num)) {
 		      throw new Error('Invalid number format');
 		    }
@@ -4705,7 +5229,7 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		    // Round to units decimal places
 		    const multiplier = Math.pow(10, units);
-		    return Math.round(amount * multiplier) / multiplier;
+		    return this.toSatoshis(amount, units) / multiplier;
 		  }
 		}
 
@@ -5234,441 +5758,6 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		outputFormatter = OutputFormatter;
 		return outputFormatter;
-	}
-
-	/**
-	 * Exact amount conversion for the canonical createTransactionBuild contract.
-	 *
-	 * Everything the chain encodes in a transaction is an integer:
-	 *   - XNA values are 10^8 sats;
-	 *   - asset payload quantities are ALSO 10^8-scaled, independently of the
-	 *     asset's `units`. `units` limits divisibility and presentation, it is
-	 *     never a multiplier (see the node's CheckAmountWithUnits in assets.cpp).
-	 *
-	 * The display <-> raw conversion is therefore a fixed 10^8 scaling, done
-	 * **through text**: scaling the decimal string keeps every digit the caller
-	 * wrote, and refuses the ones it cannot keep.
-	 *
-	 * The alternative — `BigInt(Math.round(value * 1e8))`, which is what
-	 * `assetUnitsToRaw` in neurai-create-transaction does — is correct for
-	 * ordinary magnitudes. `4.35 * 1e8` is `434999999.99999994`, but `Math.round`
-	 * recovers `435000000`; that example shows binary representation, not a wrong
-	 * result. For a finite, non-negative number it has two silent failure modes:
-	 *
-	 *   - more than eight decimals are rounded away instead of rejected, so an
-	 *     amount can vanish (`1e-9` becomes `0n`) or shift (`1.123456789` becomes
-	 *     `112345679`);
-	 *   - past `Number.MAX_SAFE_INTEGER` a double can no longer represent every
-	 *     integer, so the product may or may not survive — and nothing says which.
-	 *     `184467440.73709551` comes back as `18446744073709552n`, one unit off,
-	 *     while `21000000000` scales to `2100000000000000000n` exactly. The risk
-	 *     is that the two cases are indistinguishable from the outside.
-	 *
-	 * Outside that range its `Number(amount || 0)` also turns `NaN`, `null` and
-	 * `''` into `0n`, accepts negatives, and coerces other types — `true` yields a
-	 * whole unit. Every one of these is reachable with values a wallet can hold,
-	 * and none announces itself. Hence: convert by text, validate, and fail closed
-	 * rather than delegate.
-	 */
-
-	var assetAmount;
-	var hasRequiredAssetAmount;
-
-	function requireAssetAmount () {
-		if (hasRequiredAssetAmount) return assetAmount;
-		hasRequiredAssetAmount = 1;
-		const { InvalidAmountError, InvalidUnitsError } = requireErrors();
-
-		/** Asset payload and XNA values are both encoded with 8 decimals. */
-		const PROTOCOL_DECIMALS = 8;
-
-		/** 10^8, as a bigint, for callers that need the scale itself. */
-		const PROTOCOL_SCALE = 100000000n;
-
-		/**
-		 * Consensus ceiling for any CAmount, asset payloads included:
-		 * `MAX_MONEY = 21000000000 * COIN` in the node's `src/amount.h`, with
-		 * `MoneyRange(v)` requiring `0 <= v <= MAX_MONEY`.
-		 *
-		 * Enforced here rather than left to the callers because it is a property of
-		 * the value, not of the operation: a string is not exempt just because it
-		 * carried its digits faithfully.
-		 */
-		const MAX_MONEY_RAW = 2100000000000000000n;
-
-		const PLAIN_DECIMAL = /^-?\d+(\.\d+)?$/;
-		const SCIENTIFIC_DECIMAL = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/;
-
-		/**
-		 * Expand a scientific-notation decimal ("1e-7", "2.1e+19") into plain decimal
-		 * text. Returns the input unchanged when it carries no exponent.
-		 *
-		 * @param {string} text - Decimal text, possibly with an exponent
-		 * @returns {string} Plain decimal text
-		 */
-		function expandScientificNotation(text) {
-		  const match = SCIENTIFIC_DECIMAL.exec(text);
-		  if (!match) {
-		    return text;
-		  }
-
-		  const [, sign, intPart, fracPart = '', exponentText] = match;
-		  const digits = intPart + fracPart;
-		  const pointPosition = intPart.length + Number.parseInt(exponentText, 10);
-
-		  let expanded;
-		  if (pointPosition <= 0) {
-		    expanded = `0.${'0'.repeat(-pointPosition)}${digits}`;
-		  } else if (pointPosition >= digits.length) {
-		    expanded = digits + '0'.repeat(pointPosition - digits.length);
-		  } else {
-		    expanded = `${digits.slice(0, pointPosition)}.${digits.slice(pointPosition)}`;
-		  }
-
-		  return sign + expanded;
-		}
-
-		/**
-		 * Normalize a public amount into canonical plain decimal text.
-		 *
-		 * Strings must already be plain decimals: a caller that writes "1e3" is more
-		 * likely to have a bug than to mean 1000, and there is no reason to guess.
-		 * Numbers are accepted through their shortest round-trip representation
-		 * (`String(0.1)` is `"0.1"`, not the exact binary expansion), then expanded,
-		 * which is the only reading under which a literal like `1e-7` is meaningful.
-		 *
-		 * @param {string|number} value - Public amount
-		 * @param {string} label - What is being converted, for the error message
-		 * @returns {string} Plain decimal text
-		 * @throws {InvalidAmountError} If the value cannot be read exactly
-		 */
-		function normalizeDecimalText(value, label) {
-		  if (typeof value === 'bigint') {
-		    throw new InvalidAmountError(
-		      `${label}: a bigint is ambiguous as a display amount (is 5n five tokens ` +
-		      `or five raw units?). Pass a decimal string such as "5", or set the ` +
-		      `*Raw / *Sats field directly when you already hold protocol integers.`,
-		      value
-		    );
-		  }
-
-		  if (typeof value === 'number') {
-		    if (!Number.isFinite(value)) {
-		      throw new InvalidAmountError(`${label}: ${value} is not a finite number`, value);
-		    }
-		    return expandScientificNotation(String(value));
-		  }
-
-		  if (typeof value === 'string') {
-		    const text = value.trim();
-		    if (text === '') {
-		      throw new InvalidAmountError(`${label}: empty string is not an amount`, value);
-		    }
-		    if (SCIENTIFIC_DECIMAL.test(text)) {
-		      throw new InvalidAmountError(
-		        `${label}: "${text}" uses exponent notation. Pass a plain decimal ` +
-		        `string (for example "${expandScientificNotation(text)}") so the ` +
-		        `intended value is unambiguous.`,
-		        value
-		      );
-		    }
-		    if (!PLAIN_DECIMAL.test(text)) {
-		      throw new InvalidAmountError(`${label}: "${text}" is not a decimal number`, value);
-		    }
-		    return text;
-		  }
-
-		  throw new InvalidAmountError(
-		    `${label}: expected a decimal string or a number, received ${value === null ? 'null' : typeof value}`,
-		    value
-		  );
-		}
-
-		/**
-		 * Scale plain decimal text by 10^decimals, exactly, using text only.
-		 *
-		 * `rounding: 'ceil'` exists for one purpose: a *threshold* — a fee or a
-		 * funding requirement — computed by float arithmetic upstream, which can
-		 * carry noise digits below the satoshi (`0.031275000000000004`). Rounding it
-		 * up asks for slightly more than needed, which is safe; rounding a value that
-		 * will be *encoded* would silently create money, so the default is to reject.
-		 *
-		 * @param {string} text - Plain decimal text
-		 * @param {number} decimals - Number of decimals of the target scale
-		 * @param {string} label - What is being converted, for the error message
-		 * @param {'exact'|'ceil'} [rounding] - How to treat excess precision
-		 * @returns {bigint} Scaled integer
-		 * @throws {InvalidAmountError} If the value carries more decimals than the scale
-		 */
-		function scaleDecimalText(text, decimals, label, rounding = 'exact') {
-		  const negative = text.startsWith('-');
-		  const unsigned = negative ? text.slice(1) : text;
-		  const [intPart, fracPart = ''] = unsigned.split('.');
-
-		  if (fracPart.length > decimals) {
-		    if (rounding !== 'ceil') {
-		      throw new InvalidAmountError(
-		        `${label}: "${text}" has ${fracPart.length} decimals; the protocol ` +
-		        `encodes at most ${decimals}. The extra digits would be silently ` +
-		        `dropped, so this is rejected instead of rounded.`,
-		        text
-		      );
-		    }
-		    if (negative) {
-		      throw new InvalidAmountError(
-		        `${label}: "${text}" is negative; rounding up a negative threshold is not meaningful`,
-		        text
-		      );
-		    }
-		    const kept = BigInt(intPart + fracPart.slice(0, decimals));
-		    const dropped = fracPart.slice(decimals);
-		    return /[1-9]/.test(dropped) ? kept + 1n : kept;
-		  }
-
-		  const scaled = BigInt(intPart + fracPart.padEnd(decimals, '0'));
-		  return negative ? -scaled : scaled;
-		}
-
-		/**
-		 * Refuse a `number` whose scaled value no longer fits a safe integer.
-		 *
-		 * Above `MAX_SAFE_INTEGER / 1e8` (~90071992.55) a double can no longer name
-		 * every 8-decimal value, so the shortest round-trip form this module reads is
-		 * not necessarily the decimal the caller meant. The two paths then disagree:
-		 *
-		 *   assetAmountToRaw(184467440.73709551)   → 18446744073709550n
-		 *   assetAmountToRaw('184467440.73709551') → 18446744073709551n
-		 *
-		 * because `String(184467440.73709551)` is `'184467440.7370955'` — one digit
-		 * shorter. Neither answer is wrong for the double that arrived; the problem is
-		 * that the intended decimal was already lost at the call site. Asking for a
-		 * string is the only way to get it back, so this fails closed instead of
-		 * picking one. Strings are never restricted.
-		 *
-		 * A number that is itself a safe integer is still accepted, however large it
-		 * scales: it names its value exactly and has no fractional digits to lose, so
-		 * `21000000000` — the documented maximum supply — keeps working. What is
-		 * refused is a number that is neither a safe integer nor small enough for its
-		 * eight decimals to be unambiguous.
-		 *
-		 * @param {string|number} value - The original input
-		 * @param {bigint} raw - Scaled result
-		 * @param {string} text - Normalized decimal text
-		 * @param {string} label - Prefix for error messages
-		 * @throws {InvalidAmountError} If a number cannot carry the value exactly
-		 */
-		function assertNumberCarriedItExactly(value, raw, text, label) {
-		  if (typeof value !== 'number') {
-		    return;
-		  }
-		  if (raw <= BigInt(Number.MAX_SAFE_INTEGER) || Number.isSafeInteger(value)) {
-		    return;
-		  }
-		  throw new InvalidAmountError(
-		    `${label}: ${text} scales to ${raw}, past Number.MAX_SAFE_INTEGER, and the ` +
-		    `number that arrived can no longer name every 8-decimal value at that ` +
-		    `magnitude — it may already differ from the amount intended. Pass it as a ` +
-		    `decimal string ("${text}") instead.`,
-		    value
-		  );
-		}
-
-		/**
-		 * Convert a user-facing asset amount into the raw 10^8-scaled integer that
-		 * goes into the asset payload.
-		 *
-		 * @param {string|number} value - Display amount (e.g. "1.25")
-		 * @param {number} [units] - Asset decimal places; when given, divisibility is enforced
-		 * @param {object} [options]
-		 * @param {string} [options.label] - Prefix for error messages
-		 * @returns {bigint} Raw amount, 10^8-scaled
-		 * @throws {InvalidAmountError|InvalidUnitsError} If the amount cannot be encoded
-		 */
-		function assetAmountToRaw(value, units, options = {}) {
-		  const label = options.label || 'asset amount';
-		  const text = normalizeDecimalText(value, label);
-		  const raw = scaleDecimalText(text, PROTOCOL_DECIMALS, label);
-
-		  if (raw < 0n) {
-		    throw new InvalidAmountError(`${label}: "${text}" is negative`, value);
-		  }
-
-		  assertNumberCarriedItExactly(value, raw, text, label);
-
-		  if (raw > MAX_MONEY_RAW) {
-		    throw new InvalidAmountError(
-		      `${label}: "${text}" scales to ${raw}, above the consensus ceiling ` +
-		      `MAX_MONEY (${MAX_MONEY_RAW}, i.e. 21000000000 units). The node rejects ` +
-		      `it with MoneyRange, so it is refused here rather than serialized.`,
-		      value
-		    );
-		  }
-
-		  if (units !== undefined && units !== null) {
-		    if (!Number.isInteger(units) || units < 0 || units > PROTOCOL_DECIMALS) {
-		      throw new InvalidUnitsError(
-		        `${label}: units must be an integer between 0 and ${PROTOCOL_DECIMALS}, received ${units}`,
-		        units
-		      );
-		    }
-		    const step = 10n ** BigInt(PROTOCOL_DECIMALS - units);
-		    if (raw % step !== 0n) {
-		      throw new InvalidAmountError(
-		        `${label}: "${text}" is not a multiple of the asset's precision ` +
-		        `(units=${units} allows steps of ${formatRawAsDecimal(step)}). The ` +
-		        `node rejects it with CheckAmountWithUnits.`,
-		        value
-		      );
-		    }
-		  }
-
-		  return raw;
-		}
-
-		/**
-		 * Convert a user-facing XNA amount into satoshis, exactly.
-		 *
-		 * @param {string|number} value - Display XNA amount
-		 * @param {object} [options]
-		 * @param {string} [options.label] - Prefix for error messages
-		 * @param {boolean} [options.allowNegative] - Permit negative results
-		 * @param {'exact'|'ceil'} [options.rounding] - Only for thresholds; see scaleDecimalText
-		 * @returns {bigint} Satoshis
-		 * @throws {InvalidAmountError} If the amount cannot be encoded
-		 */
-		function xnaAmountToSats(value, options = {}) {
-		  const label = options.label || 'XNA amount';
-		  const text = normalizeDecimalText(value, label);
-		  const sats = scaleDecimalText(text, PROTOCOL_DECIMALS, label, options.rounding);
-
-		  if (sats < 0n && !options.allowNegative) {
-		    throw new InvalidAmountError(`${label}: "${text}" is negative`, value);
-		  }
-
-		  return sats;
-		}
-
-		/**
-		 * Render a protocol integer back as plain decimal text, exactly.
-		 *
-		 * Used for the RPC/legacy envelopes, which speak display amounts. Text keeps
-		 * values above `Number.MAX_SAFE_INTEGER` intact; `toNumber` is the explicit,
-		 * lossy step for the places that still need a JS number.
-		 *
-		 * @param {bigint} raw - Protocol integer (10^8-scaled)
-		 * @returns {string} Plain decimal text without trailing zeros
-		 */
-		function formatRawAsDecimal(raw) {
-		  const negative = raw < 0n;
-		  const digits = (negative ? -raw : raw).toString().padStart(PROTOCOL_DECIMALS + 1, '0');
-		  const intPart = digits.slice(0, digits.length - PROTOCOL_DECIMALS);
-		  const fracPart = digits.slice(digits.length - PROTOCOL_DECIMALS).replace(/0+$/, '');
-		  const text = fracPart === '' ? intPart : `${intPart}.${fracPart}`;
-		  return negative ? `-${text}` : text;
-		}
-
-		/**
-		 * Render a protocol integer as a JS number for the legacy display envelopes.
-		 *
-		 * Fails closed rather than returning a value the caller cannot trust: a
-		 * quantity whose display form is not exactly representable would otherwise
-		 * travel on as a plausible-looking wrong number.
-		 *
-		 * @param {bigint} raw - Protocol integer (10^8-scaled)
-		 * @param {string} [label] - Prefix for error messages
-		 * @returns {number} Display amount
-		 * @throws {InvalidAmountError} If the display value is not exactly representable
-		 */
-		function rawToDisplayNumber(raw, label = 'amount') {
-		  const text = formatRawAsDecimal(raw);
-		  const asNumber = Number(text);
-		  if (!Number.isFinite(asNumber) || expandScientificNotation(String(asNumber)) !== text) {
-		    throw new InvalidAmountError(
-		      `${label}: ${text} cannot be represented exactly as a JavaScript number. ` +
-		      `Read the raw bigint instead of the display field.`,
-		      text
-		    );
-		  }
-		  return asNumber;
-		}
-
-		/**
-		 * Normalize a chain-reported integer (UTXO `satoshis`, asset balance) to bigint.
-		 *
-		 * A `number` is only accepted when it is a safe integer. An unsafe one is
-		 * rejected rather than converted: `JSON.parse` already destroyed the low bits,
-		 * and `BigInt(9007199254740993)` cannot bring them back — it would just make
-		 * the corruption look deliberate.
-		 *
-		 * @param {bigint|string|number} value - Chain integer
-		 * @param {string} [label] - Prefix for error messages
-		 * @returns {bigint} The same integer, exactly
-		 * @throws {InvalidAmountError} If the value is not an exact integer
-		 */
-		function toProtocolInteger(value, label = 'value') {
-		  if (typeof value === 'bigint') {
-		    return value;
-		  }
-
-		  if (typeof value === 'number') {
-		    if (!Number.isInteger(value)) {
-		      throw new InvalidAmountError(`${label}: ${value} is not an integer`, value);
-		    }
-		    if (!Number.isSafeInteger(value)) {
-		      throw new InvalidAmountError(
-		        `${label}: ${value} exceeds Number.MAX_SAFE_INTEGER, so JSON parsing ` +
-		        `already lost digits. Have the RPC transport deliver this field as a ` +
-		        `string or bigint; converting it here would preserve the corruption.`,
-		        value
-		      );
-		    }
-		    return BigInt(value);
-		  }
-
-		  if (typeof value === 'string') {
-		    const text = value.trim();
-		    if (!/^-?\d+$/.test(text)) {
-		      throw new InvalidAmountError(`${label}: "${value}" is not an integer`, value);
-		    }
-		    return BigInt(text);
-		  }
-
-		  throw new InvalidAmountError(
-		    `${label}: expected an integer as bigint, string or number, received ${value === null ? 'null' : typeof value}`,
-		    value
-		  );
-		}
-
-		/**
-		 * Sum chain-reported integers exactly.
-		 *
-		 * @param {Array<object>} items - Objects carrying the field
-		 * @param {string} [field] - Field name (default: 'satoshis')
-		 * @param {string} [label] - Prefix for error messages
-		 * @returns {bigint} Exact total
-		 */
-		function sumProtocolIntegers(items, field = 'satoshis', label = 'utxo.satoshis') {
-		  return (items || []).reduce(
-		    (total, item) => total + toProtocolInteger(item ? item[field] : undefined, label),
-		    0n
-		  );
-		}
-
-		assetAmount = {
-		  PROTOCOL_DECIMALS,
-		  PROTOCOL_SCALE,
-		  MAX_MONEY_RAW,
-		  assetAmountToRaw,
-		  xnaAmountToSats,
-		  formatRawAsDecimal,
-		  rawToDisplayNumber,
-		  toProtocolInteger,
-		  sumProtocolIntegers,
-		  expandScientificNotation,
-		  normalizeDecimalText,
-		  scaleDecimalText
-		};
-		return assetAmount;
 	}
 
 	/**
@@ -6232,22 +6321,23 @@ var NeuraiAssetsBundle = (function (exports) {
 		return feeSizing;
 	}
 
-	/**
-	 * UTXO Selector
-	 * Selects appropriate UTXOs for asset transactions
-	 *
-	 * Handles selection of:
-	 * - Base currency (XNA) UTXOs for fees and burns
-	 * - Asset UTXOs for transfers and operations
-	 * - Mempool filtering to prevent double-spending
-	 */
-
 	var UTXOSelector_1;
 	var hasRequiredUTXOSelector;
 
 	function requireUTXOSelector () {
 		if (hasRequiredUTXOSelector) return UTXOSelector_1;
 		hasRequiredUTXOSelector = 1;
+		const { rawToDisplayAmount } = requireAssetAmount();
+		/**
+		 * UTXO Selector
+		 * Selects appropriate UTXOs for asset transactions
+		 *
+		 * Handles selection of:
+		 * - Base currency (XNA) UTXOs for fees and burns
+		 * - Asset UTXOs for transfers and operations
+		 * - Mempool filtering to prevent double-spending
+		 */
+
 		const { rpcErrorMessage } = requireRpcErrorMessage();
 		const { InsufficientFundsError } = requireErrors();
 		const { estimateTransactionVbytes } = requireFeeSizing();
@@ -6481,7 +6571,7 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		    return {
 		      utxos: selected,
-		      totalAmount: Number(formatRawAsDecimal(totalSatoshis)),
+		      totalAmount: rawToDisplayAmount(totalSatoshis),
 		      totalSats: totalSatoshis
 		    };
 		  }
@@ -6550,7 +6640,7 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		    return {
 		      utxos: selected,
-		      totalAmount: Number(formatRawAsDecimal(totalSatoshis)),
+		      totalAmount: rawToDisplayAmount(totalSatoshis),
 		      totalRaw: totalSatoshis
 		    };
 		  }
@@ -6617,7 +6707,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {Promise<number>} Total balance
 		   */
 		  async getBalance(addresses, assetName = null) {
-		    return Number(formatRawAsDecimal(await this.getBalanceRaw(addresses, assetName)));
+		    return rawToDisplayAmount(await this.getBalanceRaw(addresses, assetName));
 		  }
 
 		  /**
@@ -6674,7 +6764,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {number} Estimated fee in XNA
 		   */
 		  estimateFee(inputs, outputs, feeRate = 0.015) {
-		    return Number(formatRawAsDecimal(this.estimateFeeSats(inputs, outputs, feeRate)));
+		    return rawToDisplayAmount(this.estimateFeeSats(inputs, outputs, feeRate));
 		  }
 
 		  /**
@@ -6797,7 +6887,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const assetOutputs = [];
 
 		    for (const { address, value } of pairs) {
-		      if (typeof value === 'number') {
+		      if ((typeof value === 'number' || typeof value === 'string')) {
 		        xnaOutputs.push({ address, value });
 		      } else if (typeof value === 'object') {
 		        if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
@@ -6849,7 +6939,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    for (const [address, value] of entries) {
 		      let category;
 
-		      if (typeof value === 'number') {
+		      if ((typeof value === 'number' || typeof value === 'string')) {
 		        category = 1; // XNA
 		      } else if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
 		        category = 2; // Owner token
@@ -6877,7 +6967,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {string} Category name
 		   */
 		  getOutputCategory(value) {
-		    if (typeof value === 'number') {
+		    if ((typeof value === 'number' || typeof value === 'string')) {
 		      return 'XNA';
 		    } else if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
 		      return 'OWNER_TOKEN';
@@ -6929,7 +7019,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		      const category = this.getOutputCategory(value);
 		      let order;
 
-		      if (typeof value === 'number') {
+		      if ((typeof value === 'number' || typeof value === 'string')) {
 		        order = 1;
 		      } else if (value.transfer && this.isOwnerTokenTransfer(value.transfer)) {
 		        order = 2;
@@ -8011,6 +8101,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		  xnaAmountToSats,
 		  formatRawAsDecimal,
 		  rawToDisplayNumber,
+		  rawToDisplayAmount,
 		  toProtocolInteger,
 		  sumProtocolIntegers
 		} = requireAssetAmount();
@@ -8377,11 +8468,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {number} Change amount
 		   */
 		  calculateChange(totalInput, totalOutput) {
-		    const change = totalInput - totalOutput;
+		    const change = xnaAmountToSats(totalInput) - xnaAmountToSats(totalOutput);
 		    if (change < 0) {
 		      throw new Error('Insufficient funds: inputs < outputs');
 		    }
-		    return change;
+		    return rawToDisplayAmount(change);
 		  }
 
 		  /**
@@ -8500,7 +8591,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {number} User-facing asset amount
 		   */
 		  fromSatoshis(satoshis, units) {
-		    return satoshis / 100000000;
+		    return rawToDisplayAmount(toProtocolInteger(satoshis));
 		  }
 
 		  /**
@@ -8525,7 +8616,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		      return undefined;
 		    }
 
-		    return Math.round(amount * 100000000);
+		    return xnaAmountToSats(amount);
 		  }
 
 		  /**
@@ -8751,7 +8842,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {number} Display amount
 		   */
 		  satsToDisplay(sats) {
-		    return rawToDisplayNumber(sats, 'display amount');
+		    return rawToDisplayAmount(sats);
 		  }
 
 		  /**
@@ -8800,7 +8891,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    }
 
 		    const burnEntry = entries.find(({ address, value }) => {
-		      return typeof value === 'number' &&
+		      return (typeof value === 'number' || typeof value === 'string') &&
 		        value === burnAmount &&
 		        this.burnManager.isBurnAddress(address);
 		    });
@@ -8819,7 +8910,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   */
 		  extractChangeMetadata(entries, burnAddress = null) {
 		    const xnaOutputs = entries.filter(({ address, value }) => {
-		      return typeof value === 'number' && address !== burnAddress;
+		      return (typeof value === 'number' || typeof value === 'string') && address !== burnAddress;
 		    });
 
 		    if (xnaOutputs.length !== 1) {
@@ -12157,7 +12248,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		      outputs.push({ [changeAddress]: this.satsToDisplay(xnaChangeSats) });
 		    }
 		    outputs.push({
-		      [holderAddress]: OutputFormatter.formatTransferOutput(assetName, Number(amountRaw))
+		      [holderAddress]: OutputFormatter.formatTransferOutput(assetName, this.satsToDisplay(amountRaw))
 		    });
 		    outputs.push({
 		      [holderAddress]: OutputFormatter.formatFreezeAddressesOutput({

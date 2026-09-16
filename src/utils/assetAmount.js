@@ -296,6 +296,8 @@ function xnaAmountToSats(value, options = {}) {
   const label = options.label || 'XNA amount';
   const text = normalizeDecimalText(value, label);
   const sats = scaleDecimalText(text, PROTOCOL_DECIMALS, label, options.rounding);
+  assertNumberCarriedItExactly(value, sats < 0n ? -sats : sats, text, label);
+  if (!options.allowNegative && sats > MAX_MONEY_RAW) throw new InvalidAmountError(`${label}: exceeds MAX_MONEY`, value);
 
   if (sats < 0n && !options.allowNegative) {
     throw new InvalidAmountError(`${label}: "${text}" is negative`, value);
@@ -335,6 +337,19 @@ function formatRawAsDecimal(raw) {
  * @returns {number} Display amount
  * @throws {InvalidAmountError} If the display value is not exactly representable
  */
+/** Compatibility display: numbers where monetary precision is safe, text otherwise. */
+function rawToDisplayAmount(raw) {
+  const value = toProtocolInteger(raw);
+  const abs = value < 0n ? -value : value;
+  if (abs <= BigInt(Number.MAX_SAFE_INTEGER) ||
+      (abs % PROTOCOL_SCALE === 0n && abs / PROTOCOL_SCALE <= BigInt(Number.MAX_SAFE_INTEGER))) {
+    const text = formatRawAsDecimal(value);
+    const num = Number(text);
+    return expandScientificNotation(String(num)) === text ? num : text;
+  }
+  return formatRawAsDecimal(value);
+}
+
 function rawToDisplayNumber(raw, label = 'amount') {
   const text = formatRawAsDecimal(raw);
   const asNumber = Number(text);
@@ -418,6 +433,7 @@ module.exports = {
   xnaAmountToSats,
   formatRawAsDecimal,
   rawToDisplayNumber,
+  rawToDisplayAmount,
   toProtocolInteger,
   sumProtocolIntegers,
   expandScientificNotation,

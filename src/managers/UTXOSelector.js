@@ -1,3 +1,4 @@
+const { rawToDisplayAmount } = require('../utils/assetAmount');
 /**
  * UTXO Selector
  * Selects appropriate UTXOs for asset transactions
@@ -241,7 +242,7 @@ class UTXOSelector {
 
     return {
       utxos: selected,
-      totalAmount: Number(formatRawAsDecimal(totalSatoshis)),
+      totalAmount: rawToDisplayAmount(totalSatoshis),
       totalSats: totalSatoshis
     };
   }
@@ -310,7 +311,7 @@ class UTXOSelector {
 
     return {
       utxos: selected,
-      totalAmount: Number(formatRawAsDecimal(totalSatoshis)),
+      totalAmount: rawToDisplayAmount(totalSatoshis),
       totalRaw: totalSatoshis
     };
   }
@@ -377,7 +378,7 @@ class UTXOSelector {
    * @returns {Promise<number>} Total balance
    */
   async getBalance(addresses, assetName = null) {
-    return Number(formatRawAsDecimal(await this.getBalanceRaw(addresses, assetName)));
+    return rawToDisplayAmount(await this.getBalanceRaw(addresses, assetName));
   }
 
   /**
@@ -434,7 +435,7 @@ class UTXOSelector {
    * @returns {number} Estimated fee in XNA
    */
   estimateFee(inputs, outputs, feeRate = 0.015) {
-    return Number(formatRawAsDecimal(this.estimateFeeSats(inputs, outputs, feeRate)));
+    return rawToDisplayAmount(this.estimateFeeSats(inputs, outputs, feeRate));
   }
 
   /**

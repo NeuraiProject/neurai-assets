@@ -24,6 +24,7 @@ const {
   xnaAmountToSats,
   formatRawAsDecimal,
   rawToDisplayNumber,
+  rawToDisplayAmount,
   toProtocolInteger,
   sumProtocolIntegers
 } = require('../utils/assetAmount');
@@ -390,11 +391,11 @@ class BaseAssetTransactionBuilder {
    * @returns {number} Change amount
    */
   calculateChange(totalInput, totalOutput) {
-    const change = totalInput - totalOutput;
+    const change = xnaAmountToSats(totalInput) - xnaAmountToSats(totalOutput);
     if (change < 0) {
       throw new Error('Insufficient funds: inputs < outputs');
     }
-    return change;
+    return rawToDisplayAmount(change);
   }
 
   /**
@@ -515,7 +516,7 @@ class BaseAssetTransactionBuilder {
    */
   fromSatoshis(satoshis, units) {
     void units;
-    return satoshis / 100000000;
+    return rawToDisplayAmount(toProtocolInteger(satoshis));
   }
 
   /**
@@ -540,7 +541,7 @@ class BaseAssetTransactionBuilder {
       return undefined;
     }
 
-    return Math.round(amount * 100000000);
+    return xnaAmountToSats(amount);
   }
 
   /**
@@ -766,7 +767,7 @@ class BaseAssetTransactionBuilder {
    * @returns {number} Display amount
    */
   satsToDisplay(sats) {
-    return rawToDisplayNumber(sats, 'display amount');
+    return rawToDisplayAmount(sats);
   }
 
   /**
@@ -815,7 +816,7 @@ class BaseAssetTransactionBuilder {
     }
 
     const burnEntry = entries.find(({ address, value }) => {
-      return typeof value === 'number' &&
+      return (typeof value === 'number' || typeof value === 'string') &&
         value === burnAmount &&
         this.burnManager.isBurnAddress(address);
     });
@@ -834,7 +835,7 @@ class BaseAssetTransactionBuilder {
    */
   extractChangeMetadata(entries, burnAddress = null) {
     const xnaOutputs = entries.filter(({ address, value }) => {
-      return typeof value === 'number' && address !== burnAddress;
+      return (typeof value === 'number' || typeof value === 'string') && address !== burnAddress;
     });
 
     if (xnaOutputs.length !== 1) {

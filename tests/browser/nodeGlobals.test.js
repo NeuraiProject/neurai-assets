@@ -23,9 +23,11 @@ const BUNDLES = [
 
 /** A context with the browser's globals and none of Node's. */
 function browserContext() {
+  // Keep the VM-native Object: injecting the host Object breaks plain-object
+  // checks for object literals created inside this browser realm.
   const sandbox = {
     ArrayBuffer, Uint8Array, Uint32Array, DataView, TextEncoder, TextDecoder,
-    Math, JSON, Object, Array, String, Number, Boolean, BigInt, Symbol, Date,
+    Math, JSON, Array, String, Number, Boolean, BigInt, Symbol, Date,
     RegExp, Error, TypeError, RangeError, Promise, Map, Set, WeakMap, WeakSet,
     parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent,
     console, crypto: globalThis.crypto,

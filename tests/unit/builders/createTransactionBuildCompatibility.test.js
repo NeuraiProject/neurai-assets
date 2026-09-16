@@ -609,3 +609,16 @@ describe('reissue builds locally (1.5.0)', () => {
     expect(issued.buildStrategy).to.equal('rpc-node');
   });
 });
+
+describe('large XNA funding and asset quantities', () => {
+  it('issues an exact large quantity and preserves fractional large change', async () => {
+    const result = await assets(wallet({xnaUtxos:[{
+      txid:'a1'.repeat(32),outputIndex:0,address:ADDR[0],satoshis:'20000000000000001'
+    }]})).createRootAsset({assetName:'LARGE',quantity:'100000000.00000001',units:8});
+    const outputs = parseUnsignedOutputs(createFromOperation(result.createTransactionBuild).rawTx);
+    const payloads = assetPayloads(outputs);
+    expect(payloads.find(p => p.assetName === 'LARGE').amountRaw).to.equal(10000000000000001n);
+    const {decimalToSatoshis} = require('@neuraiproject/neurai-create-transaction/amounts');
+    expect(outputs.reduce((n,o)=>n+o.valueSats,0n)+decimalToSatoshis(result.fee)).to.equal(20000000000000001n);
+  });
+});
