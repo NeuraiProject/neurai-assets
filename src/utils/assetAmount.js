@@ -11,26 +11,9 @@
  * **through text**: scaling the decimal string keeps every digit the caller
  * wrote, and refuses the ones it cannot keep.
  *
- * The alternative — `BigInt(Math.round(value * 1e8))`, which is what
- * `assetUnitsToRaw` in neurai-create-transaction does — is correct for
- * ordinary magnitudes. `4.35 * 1e8` is `434999999.99999994`, but `Math.round`
- * recovers `435000000`; that example shows binary representation, not a wrong
- * result. For a finite, non-negative number it has two silent failure modes:
- *
- *   - more than eight decimals are rounded away instead of rejected, so an
- *     amount can vanish (`1e-9` becomes `0n`) or shift (`1.123456789` becomes
- *     `112345679`);
- *   - past `Number.MAX_SAFE_INTEGER` a double can no longer represent every
- *     integer, so the product may or may not survive — and nothing says which.
- *     `184467440.73709551` comes back as `18446744073709552n`, one unit off,
- *     while `21000000000` scales to `2100000000000000000n` exactly. The risk
- *     is that the two cases are indistinguishable from the outside.
- *
- * Outside that range its `Number(amount || 0)` also turns `NaN`, `null` and
- * `''` into `0n`, accepts negatives, and coerces other types — `true` yields a
- * whole unit. Every one of these is reachable with values a wallet can hold,
- * and none announces itself. Hence: convert by text, validate, and fail closed
- * rather than delegate.
+ * neurai-create-transaction also converts through exact decimal parsing.
+ * This adapter retains the assets API policies: plain decimal strings,
+ * divisibility checks, monetary limits and asset-specific validation errors.
  */
 
 const { InvalidAmountError, InvalidUnitsError } = require('../errors');
@@ -326,18 +309,10 @@ function formatRawAsDecimal(raw) {
 }
 
 /**
- * Render a protocol integer as a JS number for the legacy display envelopes.
- *
- * Fails closed rather than returning a value the caller cannot trust: a
- * quantity whose display form is not exactly representable would otherwise
- * travel on as a plausible-looking wrong number.
- *
- * @param {bigint} raw - Protocol integer (10^8-scaled)
- * @param {string} [label] - Prefix for error messages
- * @returns {number} Display amount
- * @throws {InvalidAmountError} If the display value is not exactly representable
+ * Render a protocol integer as a compatible display amount.
+ * @param {bigint|string|number} raw - Exact protocol integer
+ * @returns {number|string} Number only when a decimal round-trip retains every unit
  */
-/** Compatibility display: numbers where monetary precision is safe, text otherwise. */
 function rawToDisplayAmount(raw) {
   const value = toProtocolInteger(raw);
   const abs = value < 0n ? -value : value;
@@ -350,6 +325,11 @@ function rawToDisplayAmount(raw) {
   return formatRawAsDecimal(value);
 }
 
+/**
+ * @param {bigint} raw - Protocol integer
+ * @param {string} [label] - Error context
+ * @returns {number} Display number, or throws if the decimal round-trip loses units
+ */
 function rawToDisplayNumber(raw, label = 'amount') {
   const text = formatRawAsDecimal(raw);
   const asNumber = Number(text);

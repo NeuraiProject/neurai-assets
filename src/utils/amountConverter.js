@@ -1,5 +1,8 @@
 const { assetAmountToRaw } = require('./assetAmount');
 /**
+ * @deprecated Use utils.AssetAmount for exact protocol amounts.
+ * Legacy scaling is 10^units, not the protocol scale of 10^8.
+ * These methods may round; retained only for backward compatibility.
  * Amount Converter
  * Converts between user amounts and satoshis (protocol internal format)
  */

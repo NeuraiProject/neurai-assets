@@ -235,8 +235,8 @@ class UTXOSelector {
       throw new InsufficientFundsError(
         `Insufficient XNA balance. Required: ${required} XNA (+ ${(buffer * 100).toFixed(0)}% buffer), ` +
         `Available: ${available} XNA`,
-        Number(required),
-        Number(available)
+        rawToDisplayAmount(requiredSats),
+        rawToDisplayAmount(totalSatoshis)
       );
     }
 
@@ -304,8 +304,8 @@ class UTXOSelector {
       const required = formatRawAsDecimal(requiredRaw);
       throw new InsufficientFundsError(
         `Insufficient ${assetName} balance. Required: ${required}, Available: ${available}`,
-        Number(required),
-        Number(available)
+        rawToDisplayAmount(requiredRaw),
+        rawToDisplayAmount(totalSatoshis)
       );
     }
 

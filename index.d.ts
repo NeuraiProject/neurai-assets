@@ -1,3 +1,52 @@
+/** Display units and protocol integers are distinct contracts. */
+export type DecimalAmount = number | string;
+export type RawAmount = bigint | number | string;
+
+export interface AssetAmountUtilities {
+  PROTOCOL_DECIMALS: 8;
+  PROTOCOL_SCALE: bigint;
+  MAX_MONEY_RAW: bigint;
+  assetAmountToRaw(value: DecimalAmount, units?: number | null, options?: { label?: string }): bigint;
+  xnaAmountToSats(value: DecimalAmount, options?: {
+    label?: string; allowNegative?: boolean; rounding?: 'exact' | 'ceil';
+  }): bigint;
+  formatRawAsDecimal(raw: bigint): string;
+  rawToDisplayAmount(raw: RawAmount): DecimalAmount;
+  rawToDisplayNumber(raw: bigint, label?: string): number;
+  toProtocolInteger(value: RawAmount, label?: string): bigint;
+  sumProtocolIntegers(items: Array<Record<string, unknown>>, field?: string, label?: string): bigint;
+  expandScientificNotation(text: string): string;
+  normalizeDecimalText(value: DecimalAmount, label: string): string;
+  scaleDecimalText(text: string, decimals: number, label: string, rounding?: 'exact' | 'ceil'): bigint;
+}
+
+/** @deprecated Uses legacy 10^units scaling and may round. Use utils.AssetAmount. */
+export interface LegacyAmountConverter {
+  new(): object;
+  toSatoshis(amount: number, units: number): number;
+  fromSatoshis(satoshis: number, units: number): number;
+  format(amount: number, units: number): string;
+  parse(formattedAmount: string): number;
+  getDecimalPlaces(amount: number): number;
+  adjustToUnits(amount: number, units: number): number;
+}
+
+export interface AssetUtilities extends Record<string, unknown> {
+  AssetAmount: AssetAmountUtilities;
+  /** @deprecated Uses legacy scaling and may round. Use AssetAmount. */
+  AmountConverter: LegacyAmountConverter;
+}
+
+export interface InsufficientFundsErrorInstance extends Error {
+  code: 'INSUFFICIENT_FUNDS';
+  required: DecimalAmount;
+  available: DecimalAmount;
+}
+
+export interface AssetErrors extends Record<string, unknown> {
+  InsufficientFundsError: new(message: string, required: DecimalAmount, available: DecimalAmount) => InsufficientFundsErrorInstance;
+}
+
 /**
  * NIP-040 asset payload marker. The chain decides which one new asset
  * outputs must carry; the node reports it as
@@ -64,7 +113,7 @@ export interface BuildInput {
   txid: string;
   vout: number;
   address: string;
-  satoshis: number;
+  satoshis: RawAmount;
   assetName?: string;
 }
 
@@ -268,7 +317,7 @@ export interface NeuraiAssetsBuildResult {
   buildStrategy: BuildStrategy;
   burnAddress: string | null;
   changeAddress: string | null;
-  changeAmount: number | null;
+  changeAmount: DecimalAmount | null;
   operationType?: LegacyOperationType | 'TRANSFER';
   /**
    * Ready for `createFromOperation(...)` as-is. Always present on a successful
@@ -383,16 +432,16 @@ declare class NeuraiAssets {
   static AssetQueries: typeof AssetQueries;
   static builders: Record<string, unknown>;
   static constants: Record<string, unknown>;
-  static errors: Record<string, unknown>;
+  static errors: AssetErrors;
   static validators: Record<string, unknown>;
-  static utils: Record<string, unknown>;
+  static utils: AssetUtilities;
 }
 
 declare const builders: Record<string, unknown>;
 declare const constants: Record<string, unknown>;
-declare const errors: Record<string, unknown>;
+declare const errors: AssetErrors;
 declare const validators: Record<string, unknown>;
-declare const utils: Record<string, unknown>;
+declare const utils: AssetUtilities;
 
 export default NeuraiAssets;
 export {

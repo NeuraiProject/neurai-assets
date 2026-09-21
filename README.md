@@ -1100,3 +1100,34 @@ Canonical `createTransactionBuild` quantities and changes remain bigint.
 XNA string outputs are preserved during output ordering. Exact selection totals
 remain available as `totalSats` / raw methods; never use a rounded display value
 as a new transaction input.
+
+
+## Exact amounts and legacy converter migration
+
+In 1.6.2, insufficient-funds errors preserve `required` and `available` as
+`number | string`. Large fractional amounts are returned as exact decimal text;
+consumers must not convert them to `Number` before computing or displaying funds.
+`BuildInput.satoshis` accepts exact raw integers and `changeAmount` may be text.
+
+```js
+import { utils } from '@neuraiproject/neurai-assets';
+const { assetAmountToRaw, rawToDisplayAmount, formatRawAsDecimal } = utils.AssetAmount;
+const raw = assetAmountToRaw('100000000.00000001', 8);
+const compatibleDisplay = rawToDisplayAmount(raw); // '100000000.00000001'
+const decimalText = formatRawAsDecimal(raw); // Always plain decimal text
+```
+
+`utils.AmountConverter` is deprecated but retains its existing behavior in 1.x.
+It may round even when its result is a safe integer. Its scale is `10^units`;
+protocol XNA and asset amounts always use `10^8`, with `units` only restricting
+asset divisibility. For example, legacy `toSatoshis(1.23, 2)` returns `123`, while
+`assetAmountToRaw('1.23', 2)` returns `123000000n`. Check the unit of stored values
+before migrating: for a valid legacy integer with units 2, multiplying that exact
+integer by `1000000n` converts it to protocol raw units. Already rounded digits
+cannot be recovered. Prefer the original decimal text whenever available.
+
+Replace protocol decimal-to-raw conversion with `assetAmountToRaw`, and raw-to-display
+conversion with `rawToDisplayAmount` or `formatRawAsDecimal`. These are not drop-in
+replacements for legacy formatting or deliberate rounding. Keep user input as
+text; validate divisibility instead of silently rounding it. A display number can
+use exponent notation for tiny values, so use `formatRawAsDecimal` for plain text.

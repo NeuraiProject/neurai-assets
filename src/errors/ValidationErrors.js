@@ -65,7 +65,13 @@ class InvalidAddressError extends ValidationError {
   }
 }
 
+/** Required and available are exact display amounts, before any funding buffer. */
 class InsufficientFundsError extends ValidationError {
+  /**
+   * @param {string} message
+   * @param {number|string} required
+   * @param {number|string} available
+   */
   constructor(message, required, available) {
     super(message);
     this.name = 'InsufficientFundsError';

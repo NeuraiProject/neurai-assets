@@ -111,3 +111,45 @@ describe('UTXOSelector — fee estimation', () => {
     });
   });
 });
+
+
+describe('UTXOSelector — exact insufficient funds errors', () => {
+  const { InsufficientFundsError } = require('../../../src/errors');
+  for (const asset of [false, true]) {
+    for (const scenario of [
+      { values: ['10000000000000000', '1'], required: 10000000000000002n,
+        availableDisplay: '100000000.00000001', requiredDisplay: '100000000.00000002' },
+      { values: ['100000000'], required: 200000000n, availableDisplay: 1, requiredDisplay: 2 },
+      { values: [], required: 100000000n, availableDisplay: 0, requiredDisplay: 1 }
+    ]) {
+      it(`preserves ${asset ? 'asset' : 'XNA'} error fields for ${scenario.required}`, async () => {
+        const selector = new UTXOSelector(async () => []);
+        selector.getUTXOs = async () => scenario.values.map((satoshis, i) => ({ satoshis, txid: String(i), outputIndex: 0 }));
+        selector.getMempoolEntries = async () => [];
+        let error;
+        try {
+          if (asset) await selector.selectAssetUTXOs(['address'], 'TOKEN', undefined, { requiredRaw: scenario.required });
+          else await selector.selectBaseCurrencyUTXOs(['address'], undefined, 0, { requiredSats: scenario.required });
+        } catch (caught) { error = caught; }
+        expect(error).to.be.instanceOf(InsufficientFundsError);
+        expect(error.code).to.equal('INSUFFICIENT_FUNDS');
+        expect(error.required).to.equal(scenario.requiredDisplay);
+        expect(error.available).to.equal(scenario.availableDisplay);
+        expect(error.message).to.include(`Required: ${scenario.requiredDisplay}`);
+        expect(error.message).to.include(`Available: ${scenario.availableDisplay}`);
+      });
+    }
+  }
+  it('reports the original requirement when only the buffer is unfunded', async () => {
+    const selector = new UTXOSelector(async () => []);
+    selector.getUTXOs = async () => [{ satoshis: '100000000', txid: 'one', outputIndex: 0 }];
+    selector.getMempoolEntries = async () => [];
+    let error;
+    try { await selector.selectBaseCurrencyUTXOs(['address'], 1, 0.1); }
+    catch (caught) { error = caught; }
+    expect(error).to.be.instanceOf(InsufficientFundsError);
+    expect(error.required).to.equal(1);
+    expect(error.available).to.equal(1);
+    expect(error.message).to.include('+ 10% buffer');
+  });
+});

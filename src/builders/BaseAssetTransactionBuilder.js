@@ -831,7 +831,7 @@ class BaseAssetTransactionBuilder {
    * Extract XNA change metadata from outputs
    * @param {Array<{address: string, value: unknown}>} entries - Output entries
    * @param {string|null} burnAddress - Burn address if present
-   * @returns {{ changeAddress: string|null, changeAmount: number|null }}
+   * @returns {{ changeAddress: string|null, changeAmount: number|string|null }}
    */
   extractChangeMetadata(entries, burnAddress = null) {
     const xnaOutputs = entries.filter(({ address, value }) => {
