@@ -1,17 +1,50 @@
+const { decodeAddress } = require('@neuraiproject/neurai-create-transaction');
+
 /**
  * Network Configuration for Neurai
+ *
+ * Network labels name a chain family. `xna` / `xna-test` are the canonical
+ * labels (legacy address flows) and `xna-pq` / `xna-pq-test` the AuthScript
+ * flows. The labels of neurai-key 5 (`xna-legacy[-test]`, `xna-old-legacy`,
+ * `xna-authscript[-test]`) are accepted as aliases of their family: in this
+ * package a label never selects an address type, the address itself does.
  */
 
-const MAINNET_NETWORKS = ['xna', 'mainnet', 'xna-pq', 'mainnet-pq'];
-const TESTNET_NETWORKS = ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq'];
+const MAINNET_NETWORKS = [
+  'xna', 'mainnet', 'xna-pq', 'mainnet-pq', 'xna-legacy', 'xna-old-legacy', 'xna-authscript'
+];
+const TESTNET_NETWORKS = [
+  'xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq', 'xna-legacy-test', 'xna-authscript-test'
+];
+
+/** Labels that select the AuthScript configuration of their family. */
+const AUTHSCRIPT_NETWORKS = ['xna-pq', 'mainnet-pq', 'xna-authscript', 'xna-pq-test', 'testnet-pq', 'xna-authscript-test'];
+
+/**
+ * Address prefixes per chain. Every Bech32m prefix only goes with one witness
+ * version (node base58.cpp `DecodeDestination`):
+ *   authScript: generic AuthScript witness v1 (nc1p… / tnc1p…)
+ *   pq:         strict PQ witness v2 (pq1z… / tpq1z…)
+ *   ecdsa:      strict ECDSA witness v3 (nq1r… / tnq1r…)
+ */
+const MAINNET_PREFIXES = {
+  addressPrefix: 'N',
+  authScriptAddressPrefix: 'nc1',
+  pqAddressPrefix: 'pq1',
+  ecdsaAddressPrefix: 'nq1'
+};
+const TESTNET_PREFIXES = {
+  addressPrefix: 't',
+  authScriptAddressPrefix: 'tnc1',
+  pqAddressPrefix: 'tpq1',
+  ecdsaAddressPrefix: 'tnq1'
+};
 
 const NETWORKS = {
   MAINNET: {
     name: 'xna',
     displayName: 'Neurai Mainnet',
-    addressPrefix: 'N',
-    authScriptAddressPrefix: 'nq1',
-    pqAddressPrefix: 'nq1',
+    ...MAINNET_PREFIXES,
     assetNameMaxLength: 31,
     defaultRPCPort: 19001,
     coin: 'XNA',
@@ -20,9 +53,7 @@ const NETWORKS = {
   TESTNET: {
     name: 'xna-test',
     displayName: 'Neurai Testnet',
-    addressPrefix: 't',
-    authScriptAddressPrefix: 'tnq1',
-    pqAddressPrefix: 'tnq1',
+    ...TESTNET_PREFIXES,
     assetNameMaxLength: 121, // DePIN networks (testnet/regtest) extend the cap
     defaultRPCPort: 19101,
     coin: 'TXNA',
@@ -31,9 +62,7 @@ const NETWORKS = {
   MAINNET_PQ: {
     name: 'xna-pq',
     displayName: 'Neurai Mainnet AuthScript',
-    addressPrefix: 'N',
-    authScriptAddressPrefix: 'nq1',
-    pqAddressPrefix: 'nq1',
+    ...MAINNET_PREFIXES,
     assetNameMaxLength: 31,
     defaultRPCPort: 19001,
     coin: 'XNA',
@@ -42,9 +71,7 @@ const NETWORKS = {
   TESTNET_PQ: {
     name: 'xna-pq-test',
     displayName: 'Neurai Testnet AuthScript',
-    addressPrefix: 't',
-    authScriptAddressPrefix: 'tnq1',
-    pqAddressPrefix: 'tnq1',
+    ...TESTNET_PREFIXES,
     assetNameMaxLength: 121,
     defaultRPCPort: 19101,
     coin: 'TXNA',
@@ -113,19 +140,19 @@ const ASSET_LIMITS = {
 
 /**
  * Get network configuration
- * `xna-pq` / `xna-pq-test` are preserved as compatibility aliases for
- * AuthScript address flows on the same mainnet/testnet families.
+ * `xna-pq` / `xna-pq-test` (and neurai-key 5's `xna-authscript[-test]`)
+ * select the AuthScript configuration of the same mainnet/testnet family.
  *
- * @param {string} networkName - Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+ * @param {string} networkName - Any label of MAINNET_NETWORKS / TESTNET_NETWORKS
  * @returns {object} Network configuration
  */
 function getNetworkConfig(networkName) {
   if (MAINNET_NETWORKS.includes(networkName)) {
-    return networkName === 'xna-pq' || networkName === 'mainnet-pq'
+    return AUTHSCRIPT_NETWORKS.includes(networkName)
       ? NETWORKS.MAINNET_PQ
       : NETWORKS.MAINNET;
   } else if (TESTNET_NETWORKS.includes(networkName)) {
-    return networkName === 'xna-pq-test' || networkName === 'testnet-pq'
+    return AUTHSCRIPT_NETWORKS.includes(networkName)
       ? NETWORKS.TESTNET_PQ
       : NETWORKS.TESTNET;
   } else {
@@ -165,30 +192,37 @@ function areAddressNetworksCompatible(left, right) {
 }
 
 /**
- * Detect network from address prefix.
- * `nq1...` / `tnq1...` are AuthScript witness-v1 destinations.
+ * Detect the network family of an address by decoding it (the node's rules,
+ * through neurai-create-transaction `decodeAddress`).
+ *
+ * Base58 P2PKH addresses report `xna` / `xna-test`; every Bech32m AuthScript
+ * address — generic v1 (`nc1p…`), strict PQ v2 (`pq1z…`) and strict ECDSA v3
+ * (`nq1r…`) — reports `xna-pq` / `xna-pq-test`, this package's AuthScript
+ * label. The old `nq1p…` / `tnq1p…` encoding of generic v1 is not an address
+ * anymore and throws, like in the node.
  *
  * @param {string} address - Neurai address
  * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
  */
 function detectNetworkFromAddress(address) {
-  if (address.startsWith(NETWORKS.MAINNET_PQ.authScriptAddressPrefix)) {
-    return 'xna-pq';
-  } else if (address.startsWith(NETWORKS.TESTNET_PQ.authScriptAddressPrefix)) {
-    return 'xna-pq-test';
-  } else if (address.startsWith('N')) {
-    return 'xna';
-  } else if (address.startsWith('t')) {
-    return 'xna-test';
-  } else {
-    throw new Error(`Cannot detect network from address: ${address}`);
+  let decoded;
+  try {
+    decoded = decodeAddress(address);
+  } catch (error) {
+    throw new Error(`Cannot detect network from address: ${address} (${error.message})`);
   }
+  const testnet = decoded.network.endsWith('-test');
+  if (decoded.type === 'p2pkh') {
+    return testnet ? 'xna-test' : 'xna';
+  }
+  return testnet ? 'xna-pq-test' : 'xna-pq';
 }
 
 module.exports = {
   NETWORKS,
   MAINNET_NETWORKS,
   TESTNET_NETWORKS,
+  AUTHSCRIPT_NETWORKS,
   ASSET_NAME_RULES,
   ASSET_LIMITS,
   getNetworkConfig,

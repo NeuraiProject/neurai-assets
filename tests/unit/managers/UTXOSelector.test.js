@@ -8,12 +8,14 @@
 
 const { expect } = require('chai');
 const UTXOSelector = require('../../../src/managers/UTXOSelector');
-const { VBYTES } = require('../../../src/utils/feeSizing');
+const FeeSizing = require('../../../src/utils/feeSizing');
+const { VBYTES } = FeeSizing;
+const { ADDR, PQ_ADDR, STRICT_PQ_ADDR, STRICT_PQ_SCRIPT, ECDSA_ADDR, ECDSA_SCRIPT } = require('../../fixtures/addresses');
 
 const PQ_SCRIPT = '5120f58c1feb865f6127897834ad6f3b7ac8cff224cdbfa21d96c59b944c3311104a';
 const LEGACY_SCRIPT = '76a91409f2017224efdaf3633d26b1cf11a1df418496f688ac';
-const LEGACY_ADDRESS = 'mgRYHdMqD1gwm9QQqBRUPcDKdEZ9oVeChA';
-const PQ_ADDRESS = 'tnq1qabcdefghijklmnopqrstuvwxyz';
+const LEGACY_ADDRESS = ADDR[0];
+const PQ_ADDRESS = PQ_ADDR[0];
 
 describe('UTXOSelector — fee estimation', () => {
   const selector = new UTXOSelector(() => Promise.resolve(null));
@@ -81,6 +83,63 @@ describe('UTXOSelector — fee estimation', () => {
       expect(withPQOutput - legacyOnly).to.equal(
         VBYTES.pqOutputBytes - VBYTES.legacyOutputBytes
       );
+    });
+  });
+
+  describe('address types of neurai-key 5', () => {
+    it('sizes a strict PQ v2 input as a PQ spend (was 148 vB before 1.7.0)', () => {
+      expect(FeeSizing.estimateInputVbytes({ script: STRICT_PQ_SCRIPT })).to.equal(VBYTES.pqInputVbytes);
+      expect(FeeSizing.estimateInputVbytes({ address: STRICT_PQ_ADDR })).to.equal(VBYTES.pqInputVbytes);
+    });
+
+    it('sizes a strict ECDSA v3 input with its own constant', () => {
+      expect(FeeSizing.estimateInputVbytes({ script: ECDSA_SCRIPT })).to.equal(VBYTES.ecdsaWitnessInputVbytes);
+      expect(FeeSizing.estimateInputVbytes({ address: ECDSA_ADDR })).to.equal(VBYTES.ecdsaWitnessInputVbytes);
+      // Asset-wrapped v3 prevout.
+      expect(FeeSizing.estimateInputVbytes({ script: ECDSA_SCRIPT + 'c00a72766e74054142434445' })).to.equal(
+        VBYTES.ecdsaWitnessInputVbytes
+      );
+    });
+
+    it('counts every witness output as 43 bytes', () => {
+      for (const address of [PQ_ADDRESS, STRICT_PQ_ADDR, ECDSA_ADDR]) {
+        expect(FeeSizing.estimateOutputBytes(address), address).to.equal(VBYTES.witnessOutputBytes);
+      }
+      expect(FeeSizing.estimateOutputBytes(LEGACY_ADDRESS)).to.equal(VBYTES.legacyOutputBytes);
+    });
+
+    it('sizes asset outputs to v2 / v3 destinations on the 34-byte witness base', () => {
+      const legacy = FeeSizing.estimateOutputBytes({ address: LEGACY_ADDRESS, assetName: 'TOKEN' });
+      for (const address of [STRICT_PQ_ADDR, ECDSA_ADDR]) {
+        expect(FeeSizing.estimateOutputBytes({ address, assetName: 'TOKEN' }) - legacy, address).to.equal(9);
+        expect(FeeSizing.assetPayloadBytes({ address, assetName: 'TOKEN' })).to.equal(
+          FeeSizing.assetPayloadBytes({ address: LEGACY_ADDRESS, assetName: 'TOKEN' })
+        );
+      }
+    });
+
+    it('adds the segwit marker for any witness input, ECDSA included', () => {
+      const size = selector.estimateTransactionSize([{ script: ECDSA_SCRIPT }], [LEGACY_ADDRESS]);
+      expect(size).to.equal(
+        VBYTES.baseTxOverheadBytes + VBYTES.ecdsaWitnessInputVbytes + VBYTES.legacyOutputBytes + VBYTES.segwitMarkerVbytes
+      );
+    });
+
+    it('classifies addresses and scripts like the signer', () => {
+      expect(FeeSizing.getAddressKind(LEGACY_ADDRESS)).to.equal('p2pkh');
+      expect(FeeSizing.getAddressKind(PQ_ADDRESS)).to.equal('authscript');
+      expect(FeeSizing.getAddressKind(STRICT_PQ_ADDR)).to.equal('pq');
+      expect(FeeSizing.getAddressKind(ECDSA_ADDR)).to.equal('ecdsa');
+      expect(FeeSizing.getAddressKind('tnq1qabcdefghijklmnopqrstuvwxyz')).to.equal('unknown');
+      expect(FeeSizing.getScriptKind(STRICT_PQ_SCRIPT)).to.equal('pq');
+      expect(FeeSizing.isPQAddress(ECDSA_ADDR)).to.equal(false);
+      expect(FeeSizing.isPQAddress(STRICT_PQ_ADDR)).to.equal(true);
+      expect(FeeSizing.isPQScript(ECDSA_SCRIPT)).to.equal(false);
+      expect(FeeSizing.isPQScript(STRICT_PQ_SCRIPT)).to.equal(true);
+    });
+
+    it('is published through utils.FeeSizing', () => {
+      expect(require('../../../src/utils').FeeSizing).to.equal(FeeSizing);
     });
   });
 

@@ -3,7 +3,7 @@ const { bech32m } = require('bech32');
 const IssueQualifierBuilder = require('../../../src/builders/IssueQualifierBuilder');
 const IssueRootBuilder = require('../../../src/builders/IssueRootBuilder');
 
-const TEST_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
+const TEST_ADDRESS = bech32m.encode('tnc', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
 
 describe('IssueQualifierBuilder', () => {
   it('should serialize qualifier quantities in base units for createrawtransaction', async () => {

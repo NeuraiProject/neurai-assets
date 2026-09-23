@@ -5,8 +5,9 @@
 const { rpcErrorMessage } = require('./rpcErrorMessage');
 
 const {
-  NETWORKS,
   areAddressNetworksCompatible,
+  detectNetworkFromAddress,
+  getNetworkConfig,
   resolveAddressNetworkFamily
 } = require('../constants');
 
@@ -45,32 +46,15 @@ class NetworkDetector {
   /**
    * Detect network from address
    * @param {string} address - Neurai address
-   * @returns {string} Network label ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+   * @returns {string} Network label: `xna` / `xna-test` for Base58 P2PKH,
+   * `xna-pq` / `xna-pq-test` for every Bech32m AuthScript address (generic
+   * v1 `nc1p…`, PQ v2 `pq1z…`, ECDSA v3 `nq1r…`)
    */
   static detectFromAddress(address) {
     if (!address || typeof address !== 'string') {
       throw new Error('Address must be a non-empty string');
     }
-
-    if (address.startsWith(NETWORKS.MAINNET_PQ.authScriptAddressPrefix)) {
-      return 'xna-pq';
-    }
-
-    if (address.startsWith(NETWORKS.TESTNET_PQ.authScriptAddressPrefix)) {
-      return 'xna-pq-test';
-    }
-
-    // Mainnet addresses start with 'N'
-    if (address.startsWith(NETWORKS.MAINNET.addressPrefix)) {
-      return 'xna';
-    }
-
-    // Testnet addresses start with 't' (prefix byte 0x7f = 127)
-    if (address.startsWith(NETWORKS.TESTNET.addressPrefix)) {
-      return 'xna-test';
-    }
-
-    throw new Error(`Cannot detect network from address: ${address}`);
+    return detectNetworkFromAddress(address);
   }
 
   /**
@@ -127,17 +111,7 @@ class NetworkDetector {
    * @returns {object} Network configuration
    */
   static getNetworkConfig(network) {
-    if (network === 'xna' || network === 'mainnet') {
-      return NETWORKS.MAINNET;
-    } else if (network === 'xna-test' || network === 'testnet') {
-      return NETWORKS.TESTNET;
-    } else if (network === 'xna-pq' || network === 'mainnet-pq') {
-      return NETWORKS.MAINNET_PQ;
-    } else if (network === 'xna-pq-test' || network === 'testnet-pq') {
-      return NETWORKS.TESTNET_PQ;
-    } else {
-      throw new Error(`Unknown network: ${network}`);
-    }
+    return getNetworkConfig(network);
   }
 
   /**
@@ -146,7 +120,11 @@ class NetworkDetector {
    * @returns {boolean} True if mainnet
    */
   static isMainnet(network) {
-    return network === 'xna' || network === 'mainnet' || network === 'xna-pq' || network === 'mainnet-pq';
+    try {
+      return resolveAddressNetworkFamily(network) === 'mainnet';
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -155,11 +133,11 @@ class NetworkDetector {
    * @returns {boolean} True if testnet
    */
   static isTestnet(network) {
-    return network === 'xna-test' ||
-      network === 'testnet' ||
-      network === 'regtest' ||
-      network === 'xna-pq-test' ||
-      network === 'testnet-pq';
+    try {
+      return resolveAddressNetworkFamily(network) === 'testnet';
+    } catch {
+      return false;
+    }
   }
 }
 

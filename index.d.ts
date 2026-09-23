@@ -31,10 +31,55 @@ export interface LegacyAmountConverter {
   adjustToUnits(amount: number, units: number): number;
 }
 
+/** Destination kind of an address or scriptPubKey. */
+export type AddressKind = 'p2pkh' | 'authscript' | 'pq' | 'ecdsa' | 'unknown';
+
+export interface FeeSizingVbytes {
+  readonly baseTxOverheadBytes: number;
+  readonly segwitMarkerVbytes: number;
+  readonly legacyInputVbytes: number;
+  readonly pqInputVbytes: number;
+  readonly ecdsaWitnessInputVbytes: number;
+  readonly legacyOutputBytes: number;
+  readonly witnessOutputBytes: number;
+  /** @deprecated Same as witnessOutputBytes. */
+  readonly pqOutputBytes: number;
+}
+
+export interface FeeSizingInput {
+  script?: string;
+  address?: string;
+}
+
+export type FeeSizingOutput = string | {
+  address?: string;
+  assetName?: string;
+  kind?: 'transfer' | 'owner' | 'issue' | 'reissue' | 'tag' | 'restriction' | 'globalRestriction' | 'verifier';
+  hasIpfs?: boolean;
+  ipfsHash?: string;
+  verifierString?: string;
+};
+
+export interface FeeSizingUtilities {
+  VBYTES: FeeSizingVbytes;
+  getAddressKind(address: string): AddressKind;
+  getScriptKind(scriptHex: string): AddressKind;
+  /** True for PQ v2 and generic AuthScript v1 addresses. */
+  isPQAddress(address: string): boolean;
+  /** True for OP_1 / OP_2 scriptPubKeys with a 32-byte program. */
+  isPQScript(scriptHex: string): boolean;
+  estimateInputVbytes(utxo: FeeSizingInput): number;
+  estimateOutputBytes(target: FeeSizingOutput): number;
+  estimateTransactionVbytes(inputs: FeeSizingInput[], outputs: FeeSizingOutput[]): number;
+  assetPayloadBytes(descriptor: FeeSizingOutput): number;
+  compactSizeBytes(n: number): number;
+}
+
 export interface AssetUtilities extends Record<string, unknown> {
   AssetAmount: AssetAmountUtilities;
   /** @deprecated Uses legacy scaling and may round. Use AssetAmount. */
   AmountConverter: LegacyAmountConverter;
+  FeeSizing: FeeSizingUtilities;
 }
 
 export interface InsufficientFundsErrorInstance extends Error {

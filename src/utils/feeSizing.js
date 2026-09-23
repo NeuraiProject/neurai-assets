@@ -14,34 +14,85 @@
  * immediately as `min relay fee not met` failures from the node.
  */
 
+const ct = require('@neuraiproject/neurai-create-transaction');
+
 /** Per-component byte sizes used across the Neurai stack for fee estimation. */
 const VBYTES = Object.freeze({
   /** Raw transaction overhead: version (4) + in-count varint (1) + out-count varint (1) + locktime (4). */
   baseTxOverheadBytes: 10,
-  /** Extra weight contributed by the segwit marker + flag bytes when any input is PQ. */
+  /** Extra weight contributed by the segwit marker + flag bytes when any input is a witness input. */
   segwitMarkerVbytes: 1,
   /** vbytes for a typical legacy P2PKH input (worst-case scriptSig). */
   legacyInputVbytes: 148,
-  /** vbytes for a typical PQ AuthScript input with the default OP_TRUE witnessScript. */
+  /**
+   * vbytes for a PQ input: strict PQ witness v2, or generic AuthScript v1 with
+   * a PQ key and the default OP_TRUE witnessScript.
+   */
   pqInputVbytes: 977,
+  /** vbytes for a strict ECDSA witness v3 input (worst-case signature). */
+  ecdsaWitnessInputVbytes: 70,
   /** Bytes of a legacy P2PKH output (8-byte value + 1-byte script length + 25-byte scriptPubKey). */
   legacyOutputBytes: 34,
-  /** Bytes of an AuthScript-v1 output (8-byte value + 1-byte script length + 34-byte scriptPubKey). */
+  /** Bytes of any AuthScript output, OP_1/OP_2/OP_3 (8-byte value + 1-byte script length + 34-byte scriptPubKey). */
+  witnessOutputBytes: 43,
+  /** @deprecated Same as `witnessOutputBytes`. */
   pqOutputBytes: 43,
 });
 
-/** True for Neurai PQ AuthScript bech32 destinations (`nq1…` mainnet, `tnq1…` testnet). */
-function isPQAddress(address) {
-  return (
-    typeof address === 'string' &&
-    (address.startsWith('nq1') || address.startsWith('tnq1'))
-  );
+/**
+ * Destination kind of an address: 'p2pkh', 'authscript' (generic v1,
+ * `nc1p…`), 'pq' (strict v2, `pq1z…`), 'ecdsa' (strict v3, `nq1r…`) or
+ * 'unknown' when it does not decode.
+ */
+function getAddressKind(address) {
+  if (typeof address !== 'string' || address.length === 0) return 'unknown';
+  try {
+    return ct.decodeAddress(address).type;
+  } catch {
+    return 'unknown';
+  }
 }
 
-/** True for AuthScript-v1 scriptPubKey hex (witness v1, 32-byte program — `5120…`). */
+/** Destination kind of a hex scriptPubKey, ignoring a trailing asset wrapper. */
+function getScriptKind(scriptHex) {
+  if (typeof scriptHex !== 'string' || scriptHex.length < 4 || scriptHex.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(scriptHex)) {
+    return 'unknown';
+  }
+  return ct.classifyScriptPubKey(scriptHex).type;
+}
+
+function isWitnessKind(kind) {
+  return kind === 'authscript' || kind === 'pq' || kind === 'ecdsa';
+}
+
+/**
+ * True for the addresses whose spend carries an ML-DSA-44 witness: strict PQ
+ * v2 (`pq1z…`) and generic AuthScript v1 (`nc1p…`). `nq1…` is ECDSA witness
+ * v3 and returns false.
+ */
+function isPQAddress(address) {
+  const kind = getAddressKind(address);
+  return kind === 'pq' || kind === 'authscript';
+}
+
+/** True for `OP_1` / `OP_2` scriptPubKeys with a 32-byte program (`5120…` / `5220…`). */
 function isPQScript(scriptHex) {
-  if (typeof scriptHex !== 'string' || scriptHex.length < 4) return false;
-  return scriptHex.toLowerCase().startsWith('5120');
+  const kind = getScriptKind(scriptHex);
+  return kind === 'pq' || kind === 'authscript';
+}
+
+function inputVbytesForKind(kind) {
+  if (kind === 'pq' || kind === 'authscript') return VBYTES.pqInputVbytes;
+  if (kind === 'ecdsa') return VBYTES.ecdsaWitnessInputVbytes;
+  return VBYTES.legacyInputVbytes;
+}
+
+function inputKind(utxo) {
+  const script = utxo && utxo.script;
+  if (typeof script === 'string' && script.length > 0) {
+    return getScriptKind(script);
+  }
+  return getAddressKind(utxo && utxo.address);
 }
 
 /**
@@ -50,15 +101,7 @@ function isPQScript(scriptHex) {
  * prevouts are treated as legacy.
  */
 function estimateInputVbytes(utxo) {
-  const script = utxo && utxo.script;
-  if (typeof script === 'string' && script.length > 0) {
-    return isPQScript(script) ? VBYTES.pqInputVbytes : VBYTES.legacyInputVbytes;
-  }
-  const address = utxo && utxo.address;
-  if (typeof address === 'string' && isPQAddress(address)) {
-    return VBYTES.pqInputVbytes;
-  }
-  return VBYTES.legacyInputVbytes;
+  return inputVbytesForKind(inputKind(utxo));
 }
 
 /**
@@ -74,8 +117,6 @@ function estimateInputVbytes(utxo) {
  * Asking the serializer is the only way to keep this from drifting again: the
  * numbers below are not a model of the encoding, they ARE the encoding.
  */
-const ct = require('@neuraiproject/neurai-create-transaction');
-
 /** Bytes a CompactSize length prefix occupies for `n`. */
 function compactSizeBytes(n) {
   if (n < 253) return 1;
@@ -167,7 +208,7 @@ function assetPayloadBytes(descriptor) {
   try {
     const script = assetOutputScript(descriptor);
     if (!script) return 0;
-    const base = isPQAddress(descriptor.address) ? 34 : 25;
+    const base = isWitnessKind(getAddressKind(descriptor.address)) ? 34 : 25;
     return script.length - base;
   } catch {
     return assetPayloadBytesApprox(descriptor);
@@ -198,36 +239,36 @@ function estimateOutputBytes(target) {
     if (STANDALONE_KINDS.has(target.kind)) {
       return VBYTES.legacyOutputBytes;
     }
-    const base = isPQAddress(target.address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
+    const base = isWitnessKind(getAddressKind(target.address)) ? VBYTES.witnessOutputBytes : VBYTES.legacyOutputBytes;
     return base + assetPayloadBytesApprox(target);
   }
 
   const address =
     typeof target === 'string' ? target : (target && target.address) || '';
-  return isPQAddress(address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
+  return isWitnessKind(getAddressKind(address)) ? VBYTES.witnessOutputBytes : VBYTES.legacyOutputBytes;
 }
 
 /**
  * Sum the per-input/per-output contributions, plus base overhead and segwit
- * marker (added once when any input is PQ). Inputs may be partial UTXO-like
- * objects with `script` and/or `address`. Outputs may be address strings or
- * `{ address }` descriptors.
+ * marker (added once when any input is a witness input). Inputs may be
+ * partial UTXO-like objects with `script` and/or `address`. Outputs may be
+ * address strings or `{ address }` descriptors.
  */
 function estimateTransactionVbytes(inputs, outputs) {
   let vbytes = VBYTES.baseTxOverheadBytes;
-  let hasPQInput = false;
+  let hasWitnessInput = false;
 
   for (const inp of inputs) {
-    const v = estimateInputVbytes(inp);
-    vbytes += v;
-    if (v === VBYTES.pqInputVbytes) hasPQInput = true;
+    const kind = inputKind(inp);
+    vbytes += inputVbytesForKind(kind);
+    if (isWitnessKind(kind)) hasWitnessInput = true;
   }
 
   for (const out of outputs) {
     vbytes += estimateOutputBytes(out);
   }
 
-  if (hasPQInput) vbytes += VBYTES.segwitMarkerVbytes;
+  if (hasWitnessInput) vbytes += VBYTES.segwitMarkerVbytes;
 
   return vbytes;
 }
@@ -236,6 +277,8 @@ module.exports = {
   VBYTES,
   compactSizeBytes,
   assetOutputScript,
+  getAddressKind,
+  getScriptKind,
   isPQAddress,
   isPQScript,
   estimateInputVbytes,

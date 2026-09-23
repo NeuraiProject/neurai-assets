@@ -362,7 +362,7 @@ describe('network normalization', () => {
     ]
   };
 
-  ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq'].forEach(network => {
+  ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq', 'xna-legacy-test', 'xna-authscript-test'].forEach(network => {
     it(`accepts the testnet alias "${network}" and normalizes it`, async () => {
       const result = await assets(wallet(DEPIN_UTXOS), { network })
         .transferAsset({ assetName: '&SENSOR', recipients: [{ address: ADDR[1], amount: 5 }] });
@@ -371,7 +371,7 @@ describe('network normalization', () => {
     });
   });
 
-  ['xna', 'mainnet', 'xna-pq', 'mainnet-pq'].forEach(network => {
+  ['xna', 'mainnet', 'xna-pq', 'mainnet-pq', 'xna-legacy', 'xna-old-legacy', 'xna-authscript'].forEach(network => {
     it(`rejects the mainnet alias "${network}" at the DePIN guard`, async () => {
       // 'mainnet' is the case that mattered: create-transaction's
       // resolveNetworkFamily treats any unknown label as testnet, so passing
@@ -432,6 +432,27 @@ describe('PQ (AuthScript) destinations', () => {
     expect(payloads.map(p => p.amountRaw)).to.deep.equal([500000000n, 99500000000n]);
     // AuthScript destinations are OP_1 <32B>: 0x51 0x20 ...
     expect(outputs.some(o => o.scriptHex.startsWith('5120'))).to.equal(true);
+  });
+
+  it('serializes transfers to strict PQ v2 and ECDSA v3 destinations with OP_2 / OP_3', async () => {
+    const { STRICT_PQ_ADDR, STRICT_PQ_SCRIPT, ECDSA_ADDR, ECDSA_SCRIPT } = require('../../fixtures/addresses');
+    const result = await assets(wallet({
+      xnaUtxos: [{
+        txid: 'a1'.repeat(32), outputIndex: 0, address: ECDSA_ADDR,
+        script: ECDSA_SCRIPT, satoshis: 500000 * 1e8
+      }],
+      ownerUtxos: [{
+        txid: 'c3'.repeat(32), outputIndex: 2, address: ECDSA_ADDR,
+        script: ECDSA_SCRIPT, assetName: 'ROOTX', satoshis: 1000 * 1e8
+      }]
+    }), { network: 'xna-authscript-test', addresses: [ECDSA_ADDR], changeAddress: ECDSA_ADDR })
+      .transferAsset({ assetName: 'ROOTX', recipients: [{ address: STRICT_PQ_ADDR, amount: 5 }] });
+
+    const outputs = parseUnsignedOutputs(createFromOperation(result.createTransactionBuild).rawTx);
+    const payloads = assetPayloads(outputs);
+    expect(payloads.map(p => p.amountRaw)).to.deep.equal([500000000n, 99500000000n]);
+    expect(outputs.some(o => o.scriptHex.startsWith(STRICT_PQ_SCRIPT + 'c0'))).to.equal(true);
+    expect(outputs.some(o => o.scriptHex.startsWith(ECDSA_SCRIPT))).to.equal(true);
   });
 });
 

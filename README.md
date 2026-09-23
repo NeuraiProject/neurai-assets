@@ -46,7 +46,7 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 - ✅ **RPC queries**: Complete wrapper for all asset query methods
 - ✅ **Client-side validation**: Prevents errors before creating transactions
 - ✅ **Owner token protection**: Validation to prevent permanent loss
-- ✅ **Legacy + AuthScript destinations**: Supports classic `N...` / `t...` and witness-v1 `nq1...` / `tnq1...` addresses
+- ✅ **Every Neurai address type**: classic `N...` / `t...`, generic AuthScript v1 `nc1p...` / `tnc1p...`, PQ v2 `pq1z...` / `tpq1z...` and ECDSA v3 `nq1r...` / `tnq1r...`
 
 ## Supported Asset Types
 
@@ -154,9 +154,9 @@ You can also initialize the library with AuthScript addresses:
 ```javascript
 const assetsPQ = new NeuraiAssets(rpc, {
   network: 'xna',                    // 'xna-pq' / 'xna-pq-test' remain valid aliases
-  addresses: ['nq1yourauthscriptaddress...'],
-  changeAddress: 'nq1yourauthscriptchange...',
-  toAddress: 'nq1recipientauthscriptaddress...'
+  addresses: ['pq1zyourpqaddress...'],             // or nc1p… / nq1r…
+  changeAddress: 'pq1zyourpqchange...',
+  toAddress: 'nq1rrecipientecdsaaddress...'
 });
 ```
 
@@ -868,29 +868,52 @@ const assets = new NeuraiAssets(rpc, {
 // AuthScript mainnet using the canonical network label
 const assetsPQ = new NeuraiAssets(rpc, {
   network: 'xna',
-  addresses: ['nq1...'],
-  changeAddress: 'nq1...',
-  toAddress: 'nq1...'
+  addresses: ['pq1z...', 'nq1r...'],
+  changeAddress: 'pq1z...',
+  toAddress: 'nc1p...'
 });
 
 // AuthScript testnet using the canonical network label
 const assetsPQTest = new NeuraiAssets(rpc, {
   network: 'xna-test',
-  addresses: ['tnq1...'],
-  changeAddress: 'tnq1...',
-  toAddress: 'tnq1...'
+  addresses: ['tpq1z...', 'tnq1r...'],
+  changeAddress: 'tpq1z...',
+  toAddress: 'tnc1p...'
 });
 ```
 
-The library accepts these network names:
+Address types (every family is valid with the network label of its chain):
 
-- `xna`: mainnet chain family, valid for both legacy `N...` and AuthScript `nq1...`
-- `xna-test`: testnet chain family, valid for both legacy `t...` and AuthScript `tnq1...`
+| Address | Type | scriptPubKey |
+|---|---|---|
+| `N...` / `t...` | Legacy P2PKH | `OP_DUP OP_HASH160 <20B> OP_EQUALVERIFY OP_CHECKSIG` |
+| `nc1p...` / `tnc1p...` | generic AuthScript witness v1 | `OP_1 <32B>` |
+| `pq1z...` / `tpq1z...` | strict PQ witness v2 | `OP_2 <32B>` |
+| `nq1r...` / `tnq1r...` | strict ECDSA witness v3 | `OP_3 <32B>` |
+
+The old `nq1p...` / `tnq1p...` encoding of generic AuthScript v1 is rejected, like
+in the node (same scriptPubKey: regenerate it as `nc1p...` / `tnc1p...`). The node
+only protects a witness family where it is active: today v1 on testnet and regtest,
+v2 / v3 only on regtest.
+
+The library accepts these network names. A label only selects the chain: the
+address type always comes from the address itself.
+
+- `xna`: mainnet chain family, valid for legacy and every AuthScript family
+- `xna-test`: testnet chain family (also regtest), valid for legacy and every AuthScript family
 - `xna-pq`: compatibility alias for AuthScript mainnet flows
 - `xna-pq-test`: compatibility alias for AuthScript testnet flows
+- `mainnet`, `testnet`, `regtest`, `mainnet-pq`, `testnet-pq`: aliases
+- neurai-key 5 labels, accepted as aliases of their chain since 1.7.0:
+  `xna-legacy`, `xna-old-legacy`, `xna-authscript` (mainnet) and
+  `xna-legacy-test`, `xna-authscript-test` (testnet)
 
-If you need to derive AuthScript addresses, use `neurai-key` and pass the resulting
-`nq1...` or `tnq1...` addresses into this library.
+`NetworkDetector.detectFromAddress` decodes the address (it throws for anything
+that is not a valid Neurai address) and reports `xna` / `xna-test` for Base58
+and `xna-pq` / `xna-pq-test` for every Bech32m AuthScript family.
+
+If you need to derive AuthScript addresses, use `neurai-key` 5 and pass the resulting
+addresses into this library.
 
 ## Update Configuration
 
@@ -1013,9 +1036,10 @@ const txid = await wallet.broadcastTransaction(signedTx);
 console.log('Transaction ID:', txid);
 ```
 
-For AuthScript wallets, derive addresses externally with `neurai-key`, then initialize
-`NeuraiAssets` with those `nq1...` / `tnq1...` addresses. The recommended network labels
-are `xna` and `xna-test`; `xna-pq` and `xna-pq-test` remain available as compatibility aliases.
+For AuthScript wallets, derive addresses externally with `neurai-key` 5, then initialize
+`NeuraiAssets` with those `nc1p…` / `pq1z…` / `nq1r…` addresses (or their testnet forms).
+The recommended network labels are `xna` and `xna-test`; `xna-pq` and `xna-pq-test` remain
+available as compatibility aliases.
 
 ## Fee estimation (PQ-aware)
 
@@ -1025,7 +1049,7 @@ Running out of funds raises `InsufficientFundsError` rather than returning an un
 
 All estimates share a single `estimatesmartfee` lookup. The fee rate is stable for the lifetime of one build, so it is fetched on the first estimate and cached on the builder instance.
 
-Estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) and distinguish PQ AuthScript inputs/outputs from legacy P2PKH ones. PQ inputs spend ~977 vbytes vs ~148 for legacy — without this distinction, transactions built from PQ addresses fall under the node's `min relay fee` and are rejected with `code -26: min relay fee not met`.
+Estimates use the helpers in [`src/utils/feeSizing.js`](src/utils/feeSizing.js) (published as `utils.FeeSizing`) and size every input by its address type: PQ inputs (strict PQ v2, or generic AuthScript v1 with a PQ key) spend ~977 vbytes, strict ECDSA v3 inputs ~70 and legacy P2PKH ~148 — without this distinction, transactions built from PQ addresses fall under the node's `min relay fee` and are rejected with `code -26: min relay fee not met`. Before 1.7.0 a strict PQ v2 input was sized as a legacy one (148 vbytes).
 
 Outputs that carry an asset payload are sized as such, not as bare P2PKH outputs. An asset output is `<destination> OP_XNA_ASSET <pushdata payload> OP_DROP`, which adds roughly 20-60 bytes; ignoring that under-counts a transaction by a few percent, and that is enough to fall below the floor whenever the node's fee rate sits close to its minimum relay fee.
 
@@ -1034,24 +1058,29 @@ Since `1.5.3` those sizes are **not modelled, they are measured**: `feeSizing` a
 You should not need to call these helpers directly; they are wired into every builder. They are documented here so you can audit the fee math or use the same constants if you compose transactions outside the standard builder flow.
 
 ```js
+const { utils } = require('@neuraiproject/neurai-assets');
 const {
   VBYTES,
   estimateInputVbytes,
   estimateOutputBytes,
   estimateTransactionVbytes,
-  isPQAddress,
-  isPQScript,
-} = require('@neuraiproject/neurai-assets/src/utils/feeSizing');
+  getAddressKind,
+  getScriptKind,
+} = utils.FeeSizing;
 
-VBYTES.legacyInputVbytes; // 148
-VBYTES.pqInputVbytes;     // 977
-VBYTES.legacyOutputBytes; // 34
-VBYTES.pqOutputBytes;     // 43
+VBYTES.legacyInputVbytes;       // 148
+VBYTES.pqInputVbytes;           // 977
+VBYTES.ecdsaWitnessInputVbytes; // 70
+VBYTES.legacyOutputBytes;       // 34
+VBYTES.witnessOutputBytes;      // 43 (pqOutputBytes is a deprecated alias)
 
+getAddressKind('tpq1z…');                        // 'pq'  ('p2pkh' | 'authscript' | 'pq' | 'ecdsa' | 'unknown')
+getScriptKind('5320…');                          // 'ecdsa'
 estimateInputVbytes({ script: '5120…' });        // 977
-estimateInputVbytes({ address: 'nq1…' });        // 977
-estimateInputVbytes({ address: 'mgRYHdMq…' });   // 148
-estimateOutputBytes('tnq1…');                    // 43
+estimateInputVbytes({ script: '5220…' });        // 977
+estimateInputVbytes({ script: '5320…' });        // 70
+estimateInputVbytes({ address: 't7pv…' });       // 148
+estimateOutputBytes('tnq1r…');                   // 43
 
 // Asset outputs declare their payload. Sizes come from the real encoder, so
 // they match the bytes the node will see.
@@ -1072,8 +1101,8 @@ estimateOutputBytes({ assetName: '$SEC', kind: 'globalRestriction' });          
 estimateOutputBytes({ kind: 'verifier', verifierString: '#KYC' });                 // 17
 
 const vbytes = estimateTransactionVbytes(
-  [{ script: '5120…' }, { address: 'mgRYHdMq…' }],   // 1 PQ + 1 legacy input
-  ['nq1qchange…', 'mgRYHdMqburn…'],                  // 1 PQ + 1 legacy output
+  [{ script: '5220…' }, { address: 't7pv…' }],        // 1 PQ + 1 legacy input
+  ['tpq1zchange…', 't7pvburn…'],                      // 1 witness + 1 legacy output
 );
 ```
 
@@ -1086,7 +1115,8 @@ The constants mirror those exported from `@neuraiproject/neurai-sign-transaction
 The estimator assumes the most common spend layout for every input:
 
 - legacy inputs → P2PKH `scriptSig` worst case (DER signature + compressed pubkey)
-- PQ inputs → AuthScript v1 with the **default** `OP_TRUE` `witnessScript` and **no** `functionalArgs`
+- PQ inputs → strict PQ v2, or generic AuthScript v1 with the **default** `OP_TRUE` `witnessScript` and **no** `functionalArgs`
+- ECDSA inputs → strict ECDSA v3 (worst-case DER signature + compressed pubkey)
 
 That covers all standard asset operations. If you build transactions whose PQ inputs use covenant `witnessScript`s, NoAuth (`authType=0x00`) or Legacy AuthScript (`authType=0x02`) witnesses, compute the witness size yourself and add it to the result of `estimateTransactionVbytes` (or use `estimateVirtualSize` from `@neuraiproject/neurai-sign-transaction` after building the raw transaction, which fills dummy witnesses of the worst-case size and returns the exact post-signing vsize).
 
@@ -1101,6 +1131,33 @@ XNA string outputs are preserved during output ordering. Exact selection totals
 remain available as `totalSats` / raw methods; never use a rounded display value
 as a new transaction input.
 
+
+## 1.7.0: address types of neurai-key 5
+
+- Every Neurai address family is accepted: generic AuthScript v1 `nc1p…` /
+  `tnc1p…`, strict PQ v2 `pq1z…` / `tpq1z…` and strict ECDSA v3 `nq1r…` /
+  `tnq1r…`, besides legacy `N…` / `t…`. Before, `pq1…` and `nc1…` threw
+  "Cannot detect network" and `nq1r…` was taken for a PQ address.
+- **Fees:** a strict PQ v2 input used to be sized as legacy (148 vbytes
+  instead of ~977), which the node rejects as `min relay fee not met`. Inputs
+  are now sized per type (`VBYTES.ecdsaWitnessInputVbytes` for v3), every
+  witness output as 43 bytes, and the segwit marker is counted for any witness
+  input. `isPQAddress` / `isPQScript` decode instead of matching a prefix
+  (`nq1…` is ECDSA now); `getAddressKind` / `getScriptKind` are new.
+- `utils.FeeSizing` publishes the fee helpers (the documented
+  `src/utils/feeSizing` path was never part of the package).
+- The labels of neurai-key 5 are accepted as aliases of their chain:
+  `xna-legacy`, `xna-old-legacy`, `xna-authscript`, `xna-legacy-test`,
+  `xna-authscript-test`.
+- `NETWORKS.*.authScriptAddressPrefix` is `nc1` / `tnc1` (was `nq1` / `tnq1`),
+  `pqAddressPrefix` is `pq1` / `tpq1`, and `ecdsaAddressPrefix` (`nq1` /
+  `tnq1`) is new.
+- `NetworkDetector.detectFromAddress` / `detectNetworkFromAddress` decode the
+  address: strings that are not valid Neurai addresses (placeholders such as
+  `NExample…`, the old `tnq1p…` encoding) now throw instead of being labelled
+  by their first letter. `isMainnet` / `isTestnet` return false for unknown
+  labels instead of throwing nothing useful.
+- Requires `@neuraiproject/neurai-create-transaction` `^0.9.0`.
 
 ## Exact amounts and legacy converter migration
 

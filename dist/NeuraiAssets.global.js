@@ -1874,12 +1874,57 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		const LEGACY_MAINNET_PREFIX = 53;
 		const LEGACY_TESTNET_PREFIX = 127;
-		const PQ_MAINNET_HRP = 'nq';
-		const PQ_TESTNET_HRP = 'tnq';
 		const OP_XNA_ASSET = 0xc0;
 		const OP_DROP = 0x75;
 		const OP_1 = 0x51;
 		const OP_RESERVED = 0x50;
+		const WITNESS_FAMILIES = [
+		    {
+		        type: 'authscript',
+		        witnessVersion: 1,
+		        hrp: { mainnet: 'nc', testnet: 'tnc' },
+		        network: { mainnet: 'xna-authscript', testnet: 'xna-authscript-test' }
+		    },
+		    {
+		        type: 'pq',
+		        witnessVersion: 2,
+		        hrp: { mainnet: 'pq', testnet: 'tpq' },
+		        network: { mainnet: 'xna-pq', testnet: 'xna-pq-test' }
+		    },
+		    {
+		        type: 'ecdsa',
+		        witnessVersion: 3,
+		        hrp: { mainnet: 'nq', testnet: 'tnq' },
+		        network: { mainnet: 'xna', testnet: 'xna-test' }
+		    }
+		];
+		const AUTHSCRIPT_MAINNET_HRP = 'nc';
+		const AUTHSCRIPT_TESTNET_HRP = 'tnc';
+		const PQ_MAINNET_HRP = 'pq';
+		const PQ_TESTNET_HRP = 'tpq';
+		const ECDSA_MAINNET_HRP = 'nq';
+		const ECDSA_TESTNET_HRP = 'tnq';
+		/** The family that owns `hrp` (lowercase), with the chain it encodes. */
+		function witnessFamilyByHrp(hrp) {
+		    for (const family of WITNESS_FAMILIES) {
+		        if (family.hrp.mainnet === hrp)
+		            return { family, chain: 'mainnet' };
+		        if (family.hrp.testnet === hrp)
+		            return { family, chain: 'testnet' };
+		    }
+		    return undefined;
+		}
+		/** The family encoded by `witnessVersion`, or undefined for any other version. */
+		function witnessFamilyByVersion(witnessVersion) {
+		    return WITNESS_FAMILIES.find((family) => family.witnessVersion === witnessVersion);
+		}
+		/** `OP_1`, `OP_2` or `OP_3`: the scriptPubKey opcode of a witness version. */
+		function witnessVersionOpcode(witnessVersion) {
+		    if (!witnessFamilyByVersion(witnessVersion)) {
+		        throw new Error(`Unsupported AuthScript witness version: ${String(witnessVersion)} (expected 1, 2 or 3)`);
+		    }
+		    return OP_1 - 1 + witnessVersion;
+		}
 		/**
 		 * NIP-040 asset payload marker.
 		 *
@@ -1930,35 +1975,62 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const [a, b, c] = ASSET_MARKER_BYTES[resolveAssetMarker(marker)];
 		    return Uint8Array.of(a, b, c, typeByte);
 		}
-		function inferNetworkFromAddress(address) {
-		    const normalized = resolveAddressInput(address).toLowerCase();
-		    if (normalized.startsWith(PQ_MAINNET_HRP + '1'))
-		        return 'xna-pq';
-		    if (normalized.startsWith(PQ_TESTNET_HRP + '1'))
-		        return 'xna-pq-test';
-		    if (normalized.startsWith('n'))
-		        return 'xna';
-		    if (normalized.startsWith('t'))
-		        return 'xna-test';
-		    throw new Error(`Unsupported Neurai address: ${address}`);
-		}
 
-		function decodeAddress(address) {
-		    const normalized = resolveAddressInput(address);
-		    const lowered = normalized.toLowerCase();
-		    if (!normalized)
-		        throw new Error('Address is required');
-		    if (lowered.startsWith(PQ_MAINNET_HRP + '1') || lowered.startsWith(PQ_TESTNET_HRP + '1')) {
-		        const decoded = distExports.bech32m.decode(normalized);
-		        const version = decoded.words[0];
-		        const program = Uint8Array.from(distExports.bech32m.fromWords(decoded.words.slice(1)));
-		        if (version !== 1 || program.length !== 32) {
-		            throw new Error(`Unsupported AuthScript address program for ${address}`);
-		        }
-		        const network = lowered.startsWith(PQ_TESTNET_HRP + '1') ? 'xna-pq-test' : 'xna-pq';
-		        return { address: normalized, type: 'authscript', network, program, commitment: program };
+		// Longest Bech32m string the node's decoder accepts (bech32.cpp).
+		const BECH32M_MAX_LENGTH = 90;
+		const AUTHSCRIPT_PROGRAM_LENGTH = 32;
+		function tryBech32mDecode(address) {
+		    try {
+		        const { prefix, words } = distExports.bech32m.decode(address, BECH32M_MAX_LENGTH);
+		        return { hrp: prefix.toLowerCase(), words };
 		    }
-		    const payload = Uint8Array.from(bs58check.decode(normalized));
+		    catch {
+		        return null;
+		    }
+		}
+		function decodeWitnessAddress(address, parts) {
+		    const owner = witnessFamilyByHrp(parts.hrp);
+		    if (!owner) {
+		        throw new Error(`Unsupported Bech32m prefix "${parts.hrp}" for ${address}`);
+		    }
+		    if (parts.words.length === 0) {
+		        throw new Error(`Empty witness program in ${address}`);
+		    }
+		    const version = parts.words[0];
+		    const { family, chain } = owner;
+		    if (version !== family.witnessVersion) {
+		        const actual = witnessFamilyByVersion(version);
+		        const hint = actual
+		            ? `; witness v${version} addresses use the "${actual.hrp[chain]}" prefix`
+		            : '';
+		        const legacyHint = family.type === 'ecdsa' && version === 1
+		            ? ' Generic AuthScript v1 addresses are now encoded as nc1p… / tnc1p… ' +
+		                '(same scriptPubKey): regenerate the address (neurai-key xna-authscript networks).'
+		            : '';
+		        throw new Error(`Address ${address}: the "${parts.hrp}" prefix only encodes witness v${family.witnessVersion}, ` +
+		            `not v${version}${hint}.${legacyHint}`);
+		    }
+		    let program;
+		    try {
+		        program = Uint8Array.from(distExports.bech32m.fromWords(parts.words.slice(1)));
+		    }
+		    catch {
+		        throw new Error(`Invalid witness program padding in ${address}`);
+		    }
+		    if (program.length !== AUTHSCRIPT_PROGRAM_LENGTH) {
+		        throw new Error(`Unsupported AuthScript program length ${program.length} for ${address} (expected ${AUTHSCRIPT_PROGRAM_LENGTH})`);
+		    }
+		    return {
+		        address,
+		        type: family.type,
+		        witnessVersion: family.witnessVersion,
+		        network: family.network[chain],
+		        program,
+		        commitment: program
+		    };
+		}
+		function decodeLegacyAddress(address) {
+		    const payload = Uint8Array.from(bs58check.decode(address));
 		    if (payload.length !== 21) {
 		        throw new Error(`Unsupported legacy address payload length for ${address}`);
 		    }
@@ -1967,44 +2039,135 @@ var NeuraiAssetsBundle = (function (exports) {
 		        throw new Error(`Unsupported legacy address prefix ${prefix} for ${address}`);
 		    }
 		    return {
-		        address: normalized,
+		        address,
 		        type: 'p2pkh',
-		        network: inferNetworkFromAddress(normalized),
+		        network: prefix === LEGACY_MAINNET_PREFIX ? 'xna-legacy' : 'xna-legacy-test',
 		        program: payload.slice(1),
 		        hash: payload.slice(1)
 		    };
 		}
+		/**
+		 * Decode a Neurai address the way the node does (base58.cpp
+		 * `DecodeDestination`): Bech32m first, Base58Check otherwise.
+		 *
+		 * - Base58 P2PKH → `type: 'p2pkh'`, network `xna-legacy` / `xna-legacy-test`
+		 *   (an `xna-old-legacy` address is indistinguishable and reports
+		 *   `xna-legacy`).
+		 * - Bech32m → `authscript` (v1, `nc`/`tnc`), `pq` (v2, `pq`/`tpq`) or
+		 *   `ecdsa` (v3, `nq`/`tnq`), with `witnessVersion` and the 32-byte
+		 *   commitment. Any other HRP/version pair is rejected, including the old
+		 *   `nq1p…` / `tnq1p…` encoding of generic AuthScript v1.
+		 *
+		 * The decoder does not know whether a witness family is active on the
+		 * target chain: before activation the node refuses v2/v3 addresses and a
+		 * witness output is anyone-can-spend.
+		 */
+		function decodeAddress(address) {
+		    const normalized = resolveAddressInput(address);
+		    if (!normalized)
+		        throw new Error('Address is required');
+		    const bech32mParts = tryBech32mDecode(normalized);
+		    if (bech32mParts) {
+		        return decodeWitnessAddress(normalized, bech32mParts);
+		    }
+		    try {
+		        return decodeLegacyAddress(normalized);
+		    }
+		    catch (legacyError) {
+		        // Not Base58 either. When the string carries a known Bech32m prefix the
+		        // Bech32m failure (bad checksum, mixed case…) is the useful diagnosis.
+		        const separator = normalized.lastIndexOf('1');
+		        const hrp = separator > 0 ? normalized.slice(0, separator).toLowerCase() : '';
+		        if (witnessFamilyByHrp(hrp)) {
+		            throw new Error(`Invalid Bech32m address ${normalized} (checksum, case or character error)`);
+		        }
+		        throw legacyError;
+		    }
+		}
+		/** Chain-family label of an address: see `decodeAddress`. */
+		function inferNetworkFromAddress(address) {
+		    return decodeAddress(address).network;
+		}
+		/** True for the Bech32m (AuthScript v1, PQ v2, ECDSA v3) destinations. */
+		function isWitnessDestination(destination) {
+		    return destination.type !== 'p2pkh';
+		}
+		/** `OP_n 0x20 <32-byte commitment>` for witness version `n` (1, 2 or 3). */
+		function encodeWitnessProgramScript(witnessVersion, commitment) {
+		    const bytes = typeof commitment === 'string' ? hexToBytes(commitment) : commitment;
+		    if (bytes.length !== AUTHSCRIPT_PROGRAM_LENGTH) {
+		        throw new Error(`AuthScript commitment must be ${AUTHSCRIPT_PROGRAM_LENGTH} bytes, got ${bytes.length}`);
+		    }
+		    return concatBytes(Uint8Array.of(witnessVersionOpcode(witnessVersion)), pushData(bytes));
+		}
 		function encodeP2PKHScript(address) {
 		    const destination = decodeAddress(address);
 		    if (destination.type !== 'p2pkh') {
-		        throw new Error(`Address ${address} is not legacy P2PKH`);
+		        throw new Error(`Address ${resolveAddressInput(address)} is not legacy P2PKH`);
 		    }
 		    return Uint8Array.of(0x76, 0xa9, 0x14, ...destination.hash, 0x88, 0xac);
 		}
+		/**
+		 * scriptPubKey of an AuthScript destination of any witness version:
+		 * `OP_1` (generic v1), `OP_2` (PQ) or `OP_3` (ECDSA) followed by the
+		 * 32-byte commitment.
+		 */
 		function encodeAuthScriptDestinationScript(address) {
 		    const destination = decodeAddress(address);
-		    if (destination.type !== 'authscript') {
-		        throw new Error(`Address ${address} is not AuthScript witness v1`);
+		    if (!isWitnessDestination(destination)) {
+		        throw new Error(`Address ${resolveAddressInput(address)} is not an AuthScript (witness v1, v2 or v3) address`);
 		    }
-		    return concatBytes(Uint8Array.of(OP_1), pushData(destination.commitment));
+		    return encodeWitnessProgramScript(destination.witnessVersion, destination.commitment);
 		}
 		function encodeDestinationScript(address) {
 		    const destination = decodeAddress(address);
-		    return destination.type === 'authscript'
-		        ? encodeAuthScriptDestinationScript(address)
+		    return isWitnessDestination(destination)
+		        ? encodeWitnessProgramScript(destination.witnessVersion, destination.commitment)
 		        : encodeP2PKHScript(address);
 		}
 		function encodeNullAssetDestinationScript(address, mode = 'strict') {
 		    const destination = decodeAddress(address);
-		    if (destination.type === 'authscript') {
+		    if (isWitnessDestination(destination)) {
 		        if (mode === 'hash20') {
 		            throw new Error('hash20 null-asset mode is not supported for AuthScript destinations');
 		        }
-		        return concatBytes(Uint8Array.of(OP_XNA_ASSET, OP_1), pushData(destination.commitment));
+		        return concatBytes(Uint8Array.of(OP_XNA_ASSET, witnessVersionOpcode(destination.witnessVersion)), pushData(destination.commitment));
 		    }
 		    return concatBytes(Uint8Array.of(OP_XNA_ASSET), pushData(destination.hash));
 		}
+		/**
+		 * @deprecated The name predates the PQ witness v2 family: it encodes every
+		 * AuthScript witness version. Use `encodeAuthScriptDestinationScript`.
+		 */
 		const encodePQWitnessScript = encodeAuthScriptDestinationScript;
+		/**
+		 * Classify a scriptPubKey by its destination prefix, ignoring any trailing
+		 * asset wrapper: `76a914<20>88ac…` is P2PKH, `5120<32>…`, `5220<32>…` and
+		 * `5320<32>…` are AuthScript v1 (generic), v2 (PQ) and v3 (ECDSA).
+		 */
+		function classifyScriptPubKey(script) {
+		    const bytes = typeof script === 'string' ? hexToBytes(script) : script;
+		    if (bytes.length >= 25 &&
+		        bytes[0] === 0x76 &&
+		        bytes[1] === 0xa9 &&
+		        bytes[2] === 0x14 &&
+		        bytes[23] === 0x88 &&
+		        bytes[24] === 0xac) {
+		        return { type: 'p2pkh', program: bytes.slice(3, 23), hasSuffix: bytes.length > 25 };
+		    }
+		    if (bytes.length >= 34 && bytes[1] === 0x20) {
+		        const family = witnessFamilyByVersion(bytes[0] - (OP_1 - 1));
+		        if (family) {
+		            return {
+		                type: family.type,
+		                witnessVersion: family.witnessVersion,
+		                program: bytes.slice(2, 34),
+		                hasSuffix: bytes.length > 34
+		            };
+		        }
+		    }
+		    return { type: 'unknown', hasSuffix: false };
+		}
 
 		const OWNER_ASSET_AMOUNT = 100000000n;
 		const UNIQUE_ASSET_AMOUNT = 100000000n;
@@ -2067,10 +2230,13 @@ var NeuraiAssetsBundle = (function (exports) {
 		const NETWORK_FAMILY = {
 		    'xna': 'mainnet',
 		    'xna-legacy': 'mainnet',
+		    'xna-old-legacy': 'mainnet',
 		    'xna-pq': 'mainnet',
+		    'xna-authscript': 'mainnet',
 		    'xna-test': 'testnet',
 		    'xna-legacy-test': 'testnet',
-		    'xna-pq-test': 'testnet'
+		    'xna-pq-test': 'testnet',
+		    'xna-authscript-test': 'testnet'
 		};
 		/**
 		 * Resolve a network to its chain family, rejecting anything unrecognised.
@@ -2119,6 +2285,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		function getBurnAmountSats(operation, multiplier = 1) {
 		    return assertMoneyRange(decimalToSatoshis(BURN_COSTS_XNA[operation]) * assertMoneyRange(toRawInteger(multiplier, 'burn multiplier')));
 		}
+		/**
+		 * Network label of an address, from its encoding (see `decodeAddress`):
+		 * `xna-legacy[-test]` for Base58, `xna-authscript[-test]` for `nc1`/`tnc1`,
+		 * `xna-pq[-test]` for `pq1`/`tpq1` and `xna[-test]` for `nq1`/`tnq1`.
+		 */
 		function inferNetworkFromAnyAddress(address) {
 		    return inferNetworkFromAddress(address);
 		}
@@ -2219,11 +2390,15 @@ var NeuraiAssetsBundle = (function (exports) {
 		}
 		/**
 		 * True when `script` is exactly the 34-byte AuthScript form
-		 * `OP_1 0x20 <32-byte commitment>`. Consensus only recognises the asset
-		 * wrapper when OP_XNA_ASSET sits at byte 34 after this exact prefix.
+		 * `OP_n 0x20 <32-byte commitment>`, with `OP_1` (generic v1), `OP_2` (PQ)
+		 * or `OP_3` (ECDSA). Consensus only recognises the asset wrapper when
+		 * OP_XNA_ASSET sits at byte 34 after this exact prefix; `OP_2` / `OP_3`
+		 * only where the strict AuthScript families are active.
 		 */
 		function isAuthScriptScript(script) {
-		    return script.length === 34 && script[0] === 0x51 && script[1] === 0x20;
+		    return (script.length === 34 &&
+		        (script[0] === 0x51 || script[0] === 0x52 || script[0] === 0x53) &&
+		        script[1] === 0x20);
 		}
 		/**
 		 * Like `encodeAssetTransferScript` but takes a raw scriptPubKey instead of
@@ -2231,7 +2406,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		 * scriptPubKey bytes.
 		 *
 		 * The recipient script must be exactly P2PKH (25 bytes) or AuthScript
-		 * `OP_1 <32B>` (34 bytes): the node's OP_XNA_ASSET placement rules only
+		 * `OP_n <32B>` (34 bytes, n = 1, 2 or 3): the node's OP_XNA_ASSET placement rules only
 		 * accept the asset wrapper right after one of those two prefixes, on every
 		 * network, so appending it to any other script (a bare covenant, P2SH, …)
 		 * produces a consensus-invalid output. To pay assets into an arbitrary
@@ -2254,7 +2429,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    if (!isP2pkhScript(spkBytes) && !isAuthScriptScript(spkBytes)) {
 		        throw new Error('asset transfers to arbitrary scripts are rejected by consensus ' +
 		            '(OP_XNA_ASSET placement rules): the recipient scriptPubKey must be ' +
-		            'exactly P2PKH (25 bytes) or AuthScript OP_1 <32B> (34 bytes); ' +
+		            'exactly P2PKH (25 bytes) or AuthScript OP_1/OP_2/OP_3 <32B> (34 bytes); ' +
 		            'commit the script into an AuthScript destination instead');
 		    }
 		    return concatBytes(spkBytes, Uint8Array.of(OP_XNA_ASSET), pushData(encodeAssetTransferPayload(assetName, amountRaw, message, expireTime, options)), Uint8Array.of(OP_DROP));
@@ -3586,20 +3761,28 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return { size, strippedSize, weight, vsize: Math.ceil(weight / 4) };
 		}
 
+		dist.AUTHSCRIPT_MAINNET_HRP = AUTHSCRIPT_MAINNET_HRP;
+		dist.AUTHSCRIPT_TESTNET_HRP = AUTHSCRIPT_TESTNET_HRP;
 		dist.DEFAULT_ASSET_MARKER = DEFAULT_ASSET_MARKER;
 		dist.DEPIN_MAX_NAME_LENGTH = DEPIN_MAX_NAME_LENGTH;
+		dist.ECDSA_MAINNET_HRP = ECDSA_MAINNET_HRP;
+		dist.ECDSA_TESTNET_HRP = ECDSA_TESTNET_HRP;
 		dist.MAX_MONEY = MAX_MONEY;
 		dist.OWNER_ASSET_AMOUNT = OWNER_ASSET_AMOUNT;
+		dist.PQ_MAINNET_HRP = PQ_MAINNET_HRP;
+		dist.PQ_TESTNET_HRP = PQ_TESTNET_HRP;
 		dist.REGTEST_GLOBAL_BURN_ADDRESS = REGTEST_GLOBAL_BURN_ADDRESS;
 		dist.SATS_PER_XNA = SATS_PER_XNA;
 		dist.UNIQUE_ASSETS_REISSUABLE = UNIQUE_ASSETS_REISSUABLE;
 		dist.UNIQUE_ASSET_AMOUNT = UNIQUE_ASSET_AMOUNT;
 		dist.UNIQUE_ASSET_UNITS = UNIQUE_ASSET_UNITS;
+		dist.WITNESS_FAMILIES = WITNESS_FAMILIES;
 		dist.assertDepinAssetName = assertDepinAssetName;
 		dist.assertDepinNetwork = assertDepinNetwork;
 		dist.assertMoneyRange = assertMoneyRange;
 		dist.assetPayloadPrefix = assetPayloadPrefix;
 		dist.assetUnitsToRaw = assetUnitsToRaw;
+		dist.classifyScriptPubKey = classifyScriptPubKey;
 		dist.computeTxid = computeTxid;
 		dist.computeWtxid = computeWtxid;
 		dist.createAssetTransferOutput = createAssetTransferOutput;
@@ -3657,6 +3840,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.encodeReissueAssetScript = encodeReissueAssetScript;
 		dist.encodeVerifierStringPayload = encodeVerifierStringPayload;
 		dist.encodeVerifierStringScript = encodeVerifierStringScript;
+		dist.encodeWitnessProgramScript = encodeWitnessProgramScript;
 		dist.estimateTransactionSize = estimateTransactionSize;
 		dist.formatAssetDataReferenceHex = formatAssetDataReferenceHex;
 		dist.getBurnAddressForOperation = getBurnAddressForOperation;
@@ -3671,6 +3855,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.isEncodedAssetDataReferenceHex = isEncodedAssetDataReferenceHex;
 		dist.isRawAssetDataReferenceHex = isRawAssetDataReferenceHex;
 		dist.isTxidAssetReference = isTxidAssetReference;
+		dist.isWitnessDestination = isWitnessDestination;
 		dist.normalizeVerifierString = normalizeVerifierString;
 		dist.parseTransaction = parseTransaction;
 		dist.resolveAddressInput = resolveAddressInput;
@@ -3787,6 +3972,247 @@ var NeuraiAssetsBundle = (function (exports) {
 		return fees;
 	}
 
+	var networks;
+	var hasRequiredNetworks;
+
+	function requireNetworks () {
+		if (hasRequiredNetworks) return networks;
+		hasRequiredNetworks = 1;
+		const { decodeAddress } = requireDist_1();
+
+		/**
+		 * Network Configuration for Neurai
+		 *
+		 * Network labels name a chain family. `xna` / `xna-test` are the canonical
+		 * labels (legacy address flows) and `xna-pq` / `xna-pq-test` the AuthScript
+		 * flows. The labels of neurai-key 5 (`xna-legacy[-test]`, `xna-old-legacy`,
+		 * `xna-authscript[-test]`) are accepted as aliases of their family: in this
+		 * package a label never selects an address type, the address itself does.
+		 */
+
+		const MAINNET_NETWORKS = [
+		  'xna', 'mainnet', 'xna-pq', 'mainnet-pq', 'xna-legacy', 'xna-old-legacy', 'xna-authscript'
+		];
+		const TESTNET_NETWORKS = [
+		  'xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq', 'xna-legacy-test', 'xna-authscript-test'
+		];
+
+		/** Labels that select the AuthScript configuration of their family. */
+		const AUTHSCRIPT_NETWORKS = ['xna-pq', 'mainnet-pq', 'xna-authscript', 'xna-pq-test', 'testnet-pq', 'xna-authscript-test'];
+
+		/**
+		 * Address prefixes per chain. Every Bech32m prefix only goes with one witness
+		 * version (node base58.cpp `DecodeDestination`):
+		 *   authScript: generic AuthScript witness v1 (nc1p… / tnc1p…)
+		 *   pq:         strict PQ witness v2 (pq1z… / tpq1z…)
+		 *   ecdsa:      strict ECDSA witness v3 (nq1r… / tnq1r…)
+		 */
+		const MAINNET_PREFIXES = {
+		  addressPrefix: 'N',
+		  authScriptAddressPrefix: 'nc1',
+		  pqAddressPrefix: 'pq1',
+		  ecdsaAddressPrefix: 'nq1'
+		};
+		const TESTNET_PREFIXES = {
+		  addressPrefix: 't',
+		  authScriptAddressPrefix: 'tnc1',
+		  pqAddressPrefix: 'tpq1',
+		  ecdsaAddressPrefix: 'tnq1'
+		};
+
+		const NETWORKS = {
+		  MAINNET: {
+		    name: 'xna',
+		    displayName: 'Neurai Mainnet',
+		    ...MAINNET_PREFIXES,
+		    assetNameMaxLength: 31,
+		    defaultRPCPort: 19001,
+		    coin: 'XNA',
+		    baseNetwork: 'xna'
+		  },
+		  TESTNET: {
+		    name: 'xna-test',
+		    displayName: 'Neurai Testnet',
+		    ...TESTNET_PREFIXES,
+		    assetNameMaxLength: 121, // DePIN networks (testnet/regtest) extend the cap
+		    defaultRPCPort: 19101,
+		    coin: 'TXNA',
+		    baseNetwork: 'xna-test'
+		  },
+		  MAINNET_PQ: {
+		    name: 'xna-pq',
+		    displayName: 'Neurai Mainnet AuthScript',
+		    ...MAINNET_PREFIXES,
+		    assetNameMaxLength: 31,
+		    defaultRPCPort: 19001,
+		    coin: 'XNA',
+		    baseNetwork: 'xna'
+		  },
+		  TESTNET_PQ: {
+		    name: 'xna-pq-test',
+		    displayName: 'Neurai Testnet AuthScript',
+		    ...TESTNET_PREFIXES,
+		    assetNameMaxLength: 121,
+		    defaultRPCPort: 19101,
+		    coin: 'TXNA',
+		    baseNetwork: 'xna-test'
+		  }
+		};
+
+		/**
+		 * Asset naming helpers.
+		 * Network-specific maximum lengths are enforced in AssetNameValidator.
+		 */
+		const ASSET_NAME_RULES = {
+		  ROOT: {
+		    minLength: 3,
+		    maxLength: 31,
+		    pattern: /^[A-Z0-9_.]+$/,
+		    reserved: ['XNA', 'NEURAI', 'NEURAICOIN']
+		  },
+		  SUB: {
+		    minLength: 1,
+		    maxLength: 31,
+		    pattern: /^[A-Z0-9_.]+$/,
+		    separator: '/',
+		    maxDepth: null
+		  },
+		  UNIQUE: {
+		    minLength: 1,
+		    maxLength: 32,
+		    pattern: /^[-A-Za-z0-9@$%&*()[\]{}_.?:]+$/,
+		    separator: '#'
+		  },
+		  QUALIFIER: {
+		    minLength: 3,
+		    maxLength: 32,
+		    pattern: /^[A-Z0-9_.]+$/,
+		    prefix: '#',
+		    separator: '/'
+		  },
+		  RESTRICTED: {
+		    minLength: 3,
+		    maxLength: 32,
+		    pattern: /^[A-Z0-9_.]+$/,
+		    prefix: '$'
+		  },
+		  DEPIN: {
+		    minLength: 3,
+		    maxLength: 121,
+		    pattern: /^[A-Z0-9_.]+$/,
+		    prefix: '&',
+		    separator: '/'
+		  }
+		};
+
+		/**
+		 * Asset quantity limits
+		 */
+		const ASSET_LIMITS = {
+		  MIN_QUANTITY: 1,
+		  MAX_QUANTITY: 21000000000,  // 21 billion (same as Bitcoin's 21M with 3 extra decimals)
+		  MIN_UNITS: 0,
+		  MAX_UNITS: 8,
+		  OWNER_TOKEN_QUANTITY: 1,    // Owner tokens are always exactly 1
+		  QUALIFIER_MIN_QUANTITY: 1,
+		  QUALIFIER_MAX_QUANTITY: 10  // Qualifiers are limited to 1-10 units
+		};
+
+		/**
+		 * Get network configuration
+		 * `xna-pq` / `xna-pq-test` (and neurai-key 5's `xna-authscript[-test]`)
+		 * select the AuthScript configuration of the same mainnet/testnet family.
+		 *
+		 * @param {string} networkName - Any label of MAINNET_NETWORKS / TESTNET_NETWORKS
+		 * @returns {object} Network configuration
+		 */
+		function getNetworkConfig(networkName) {
+		  if (MAINNET_NETWORKS.includes(networkName)) {
+		    return AUTHSCRIPT_NETWORKS.includes(networkName)
+		      ? NETWORKS.MAINNET_PQ
+		      : NETWORKS.MAINNET;
+		  } else if (TESTNET_NETWORKS.includes(networkName)) {
+		    return AUTHSCRIPT_NETWORKS.includes(networkName)
+		      ? NETWORKS.TESTNET_PQ
+		      : NETWORKS.TESTNET;
+		  } else {
+		    throw new Error(`Unknown network: ${networkName}`);
+		  }
+		}
+
+		/**
+		 * Resolve a network name to its chain family.
+		 * AuthScript aliases share the same family as legacy addresses.
+		 *
+		 * @param {string} networkName - Network name
+		 * @returns {'mainnet'|'testnet'} Network family
+		 */
+		function resolveAddressNetworkFamily(networkName) {
+		  if (MAINNET_NETWORKS.includes(networkName)) {
+		    return 'mainnet';
+		  }
+
+		  if (TESTNET_NETWORKS.includes(networkName)) {
+		    return 'testnet';
+		  }
+
+		  throw new Error(`Unknown network: ${networkName}`);
+		}
+
+		/**
+		 * Determine whether two network labels are compatible for address use.
+		 * This treats legacy and AuthScript labels on the same chain as compatible.
+		 *
+		 * @param {string} left - First network name
+		 * @param {string} right - Second network name
+		 * @returns {boolean} True if both belong to the same chain family
+		 */
+		function areAddressNetworksCompatible(left, right) {
+		  return resolveAddressNetworkFamily(left) === resolveAddressNetworkFamily(right);
+		}
+
+		/**
+		 * Detect the network family of an address by decoding it (the node's rules,
+		 * through neurai-create-transaction `decodeAddress`).
+		 *
+		 * Base58 P2PKH addresses report `xna` / `xna-test`; every Bech32m AuthScript
+		 * address — generic v1 (`nc1p…`), strict PQ v2 (`pq1z…`) and strict ECDSA v3
+		 * (`nq1r…`) — reports `xna-pq` / `xna-pq-test`, this package's AuthScript
+		 * label. The old `nq1p…` / `tnq1p…` encoding of generic v1 is not an address
+		 * anymore and throws, like in the node.
+		 *
+		 * @param {string} address - Neurai address
+		 * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+		 */
+		function detectNetworkFromAddress(address) {
+		  let decoded;
+		  try {
+		    decoded = decodeAddress(address);
+		  } catch (error) {
+		    throw new Error(`Cannot detect network from address: ${address} (${error.message})`);
+		  }
+		  const testnet = decoded.network.endsWith('-test');
+		  if (decoded.type === 'p2pkh') {
+		    return testnet ? 'xna-test' : 'xna';
+		  }
+		  return testnet ? 'xna-pq-test' : 'xna-pq';
+		}
+
+		networks = {
+		  NETWORKS,
+		  MAINNET_NETWORKS,
+		  TESTNET_NETWORKS,
+		  AUTHSCRIPT_NETWORKS,
+		  ASSET_NAME_RULES,
+		  ASSET_LIMITS,
+		  getNetworkConfig,
+		  resolveAddressNetworkFamily,
+		  areAddressNetworksCompatible,
+		  detectNetworkFromAddress
+		};
+		return networks;
+	}
+
 	/**
 	 * Burn Addresses for Asset Operations
 	 * Different addresses for mainnet and testnet
@@ -3798,8 +4224,7 @@ var NeuraiAssetsBundle = (function (exports) {
 	function requireBurnAddresses () {
 		if (hasRequiredBurnAddresses) return burnAddresses;
 		hasRequiredBurnAddresses = 1;
-		const MAINNET_NETWORKS = ['xna', 'mainnet', 'xna-pq', 'mainnet-pq'];
-		const TESTNET_NETWORKS = ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq'];
+		const { MAINNET_NETWORKS, TESTNET_NETWORKS } = requireNetworks();
 
 		function resolveNetworkFamily(network) {
 		  if (MAINNET_NETWORKS.includes(network)) {
@@ -3906,213 +4331,6 @@ var NeuraiAssetsBundle = (function (exports) {
 		  isBurnAddress
 		};
 		return burnAddresses;
-	}
-
-	/**
-	 * Network Configuration for Neurai
-	 */
-
-	var networks;
-	var hasRequiredNetworks;
-
-	function requireNetworks () {
-		if (hasRequiredNetworks) return networks;
-		hasRequiredNetworks = 1;
-		const MAINNET_NETWORKS = ['xna', 'mainnet', 'xna-pq', 'mainnet-pq'];
-		const TESTNET_NETWORKS = ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq'];
-
-		const NETWORKS = {
-		  MAINNET: {
-		    name: 'xna',
-		    displayName: 'Neurai Mainnet',
-		    addressPrefix: 'N',
-		    authScriptAddressPrefix: 'nq1',
-		    pqAddressPrefix: 'nq1',
-		    assetNameMaxLength: 31,
-		    defaultRPCPort: 19001,
-		    coin: 'XNA',
-		    baseNetwork: 'xna'
-		  },
-		  TESTNET: {
-		    name: 'xna-test',
-		    displayName: 'Neurai Testnet',
-		    addressPrefix: 't',
-		    authScriptAddressPrefix: 'tnq1',
-		    pqAddressPrefix: 'tnq1',
-		    assetNameMaxLength: 121, // DePIN networks (testnet/regtest) extend the cap
-		    defaultRPCPort: 19101,
-		    coin: 'TXNA',
-		    baseNetwork: 'xna-test'
-		  },
-		  MAINNET_PQ: {
-		    name: 'xna-pq',
-		    displayName: 'Neurai Mainnet AuthScript',
-		    addressPrefix: 'N',
-		    authScriptAddressPrefix: 'nq1',
-		    pqAddressPrefix: 'nq1',
-		    assetNameMaxLength: 31,
-		    defaultRPCPort: 19001,
-		    coin: 'XNA',
-		    baseNetwork: 'xna'
-		  },
-		  TESTNET_PQ: {
-		    name: 'xna-pq-test',
-		    displayName: 'Neurai Testnet AuthScript',
-		    addressPrefix: 't',
-		    authScriptAddressPrefix: 'tnq1',
-		    pqAddressPrefix: 'tnq1',
-		    assetNameMaxLength: 121,
-		    defaultRPCPort: 19101,
-		    coin: 'TXNA',
-		    baseNetwork: 'xna-test'
-		  }
-		};
-
-		/**
-		 * Asset naming helpers.
-		 * Network-specific maximum lengths are enforced in AssetNameValidator.
-		 */
-		const ASSET_NAME_RULES = {
-		  ROOT: {
-		    minLength: 3,
-		    maxLength: 31,
-		    pattern: /^[A-Z0-9_.]+$/,
-		    reserved: ['XNA', 'NEURAI', 'NEURAICOIN']
-		  },
-		  SUB: {
-		    minLength: 1,
-		    maxLength: 31,
-		    pattern: /^[A-Z0-9_.]+$/,
-		    separator: '/',
-		    maxDepth: null
-		  },
-		  UNIQUE: {
-		    minLength: 1,
-		    maxLength: 32,
-		    pattern: /^[-A-Za-z0-9@$%&*()[\]{}_.?:]+$/,
-		    separator: '#'
-		  },
-		  QUALIFIER: {
-		    minLength: 3,
-		    maxLength: 32,
-		    pattern: /^[A-Z0-9_.]+$/,
-		    prefix: '#',
-		    separator: '/'
-		  },
-		  RESTRICTED: {
-		    minLength: 3,
-		    maxLength: 32,
-		    pattern: /^[A-Z0-9_.]+$/,
-		    prefix: '$'
-		  },
-		  DEPIN: {
-		    minLength: 3,
-		    maxLength: 121,
-		    pattern: /^[A-Z0-9_.]+$/,
-		    prefix: '&',
-		    separator: '/'
-		  }
-		};
-
-		/**
-		 * Asset quantity limits
-		 */
-		const ASSET_LIMITS = {
-		  MIN_QUANTITY: 1,
-		  MAX_QUANTITY: 21000000000,  // 21 billion (same as Bitcoin's 21M with 3 extra decimals)
-		  MIN_UNITS: 0,
-		  MAX_UNITS: 8,
-		  OWNER_TOKEN_QUANTITY: 1,    // Owner tokens are always exactly 1
-		  QUALIFIER_MIN_QUANTITY: 1,
-		  QUALIFIER_MAX_QUANTITY: 10  // Qualifiers are limited to 1-10 units
-		};
-
-		/**
-		 * Get network configuration
-		 * `xna-pq` / `xna-pq-test` are preserved as compatibility aliases for
-		 * AuthScript address flows on the same mainnet/testnet families.
-		 *
-		 * @param {string} networkName - Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
-		 * @returns {object} Network configuration
-		 */
-		function getNetworkConfig(networkName) {
-		  if (MAINNET_NETWORKS.includes(networkName)) {
-		    return networkName === 'xna-pq' || networkName === 'mainnet-pq'
-		      ? NETWORKS.MAINNET_PQ
-		      : NETWORKS.MAINNET;
-		  } else if (TESTNET_NETWORKS.includes(networkName)) {
-		    return networkName === 'xna-pq-test' || networkName === 'testnet-pq'
-		      ? NETWORKS.TESTNET_PQ
-		      : NETWORKS.TESTNET;
-		  } else {
-		    throw new Error(`Unknown network: ${networkName}`);
-		  }
-		}
-
-		/**
-		 * Resolve a network name to its chain family.
-		 * AuthScript aliases share the same family as legacy addresses.
-		 *
-		 * @param {string} networkName - Network name
-		 * @returns {'mainnet'|'testnet'} Network family
-		 */
-		function resolveAddressNetworkFamily(networkName) {
-		  if (MAINNET_NETWORKS.includes(networkName)) {
-		    return 'mainnet';
-		  }
-
-		  if (TESTNET_NETWORKS.includes(networkName)) {
-		    return 'testnet';
-		  }
-
-		  throw new Error(`Unknown network: ${networkName}`);
-		}
-
-		/**
-		 * Determine whether two network labels are compatible for address use.
-		 * This treats legacy and AuthScript labels on the same chain as compatible.
-		 *
-		 * @param {string} left - First network name
-		 * @param {string} right - Second network name
-		 * @returns {boolean} True if both belong to the same chain family
-		 */
-		function areAddressNetworksCompatible(left, right) {
-		  return resolveAddressNetworkFamily(left) === resolveAddressNetworkFamily(right);
-		}
-
-		/**
-		 * Detect network from address prefix.
-		 * `nq1...` / `tnq1...` are AuthScript witness-v1 destinations.
-		 *
-		 * @param {string} address - Neurai address
-		 * @returns {string} Network name ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
-		 */
-		function detectNetworkFromAddress(address) {
-		  if (address.startsWith(NETWORKS.MAINNET_PQ.authScriptAddressPrefix)) {
-		    return 'xna-pq';
-		  } else if (address.startsWith(NETWORKS.TESTNET_PQ.authScriptAddressPrefix)) {
-		    return 'xna-pq-test';
-		  } else if (address.startsWith('N')) {
-		    return 'xna';
-		  } else if (address.startsWith('t')) {
-		    return 'xna-test';
-		  } else {
-		    throw new Error(`Cannot detect network from address: ${address}`);
-		  }
-		}
-
-		networks = {
-		  NETWORKS,
-		  MAINNET_NETWORKS,
-		  TESTNET_NETWORKS,
-		  ASSET_NAME_RULES,
-		  ASSET_LIMITS,
-		  getNetworkConfig,
-		  resolveAddressNetworkFamily,
-		  areAddressNetworksCompatible,
-		  detectNetworkFromAddress
-		};
-		return networks;
 	}
 
 	/**
@@ -5240,8 +5458,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		const { rpcErrorMessage } = requireRpcErrorMessage();
 
 		const {
-		  NETWORKS,
 		  areAddressNetworksCompatible,
+		  detectNetworkFromAddress,
+		  getNetworkConfig,
 		  resolveAddressNetworkFamily
 		} = requireConstants();
 
@@ -5280,32 +5499,15 @@ var NeuraiAssetsBundle = (function (exports) {
 		  /**
 		   * Detect network from address
 		   * @param {string} address - Neurai address
-		   * @returns {string} Network label ('xna', 'xna-test', 'xna-pq', or 'xna-pq-test')
+		   * @returns {string} Network label: `xna` / `xna-test` for Base58 P2PKH,
+		   * `xna-pq` / `xna-pq-test` for every Bech32m AuthScript address (generic
+		   * v1 `nc1p…`, PQ v2 `pq1z…`, ECDSA v3 `nq1r…`)
 		   */
 		  static detectFromAddress(address) {
 		    if (!address || typeof address !== 'string') {
 		      throw new Error('Address must be a non-empty string');
 		    }
-
-		    if (address.startsWith(NETWORKS.MAINNET_PQ.authScriptAddressPrefix)) {
-		      return 'xna-pq';
-		    }
-
-		    if (address.startsWith(NETWORKS.TESTNET_PQ.authScriptAddressPrefix)) {
-		      return 'xna-pq-test';
-		    }
-
-		    // Mainnet addresses start with 'N'
-		    if (address.startsWith(NETWORKS.MAINNET.addressPrefix)) {
-		      return 'xna';
-		    }
-
-		    // Testnet addresses start with 't' (prefix byte 0x7f = 127)
-		    if (address.startsWith(NETWORKS.TESTNET.addressPrefix)) {
-		      return 'xna-test';
-		    }
-
-		    throw new Error(`Cannot detect network from address: ${address}`);
+		    return detectNetworkFromAddress(address);
 		  }
 
 		  /**
@@ -5362,17 +5564,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {object} Network configuration
 		   */
 		  static getNetworkConfig(network) {
-		    if (network === 'xna' || network === 'mainnet') {
-		      return NETWORKS.MAINNET;
-		    } else if (network === 'xna-test' || network === 'testnet') {
-		      return NETWORKS.TESTNET;
-		    } else if (network === 'xna-pq' || network === 'mainnet-pq') {
-		      return NETWORKS.MAINNET_PQ;
-		    } else if (network === 'xna-pq-test' || network === 'testnet-pq') {
-		      return NETWORKS.TESTNET_PQ;
-		    } else {
-		      throw new Error(`Unknown network: ${network}`);
-		    }
+		    return getNetworkConfig(network);
 		  }
 
 		  /**
@@ -5381,7 +5573,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {boolean} True if mainnet
 		   */
 		  static isMainnet(network) {
-		    return network === 'xna' || network === 'mainnet' || network === 'xna-pq' || network === 'mainnet-pq';
+		    try {
+		      return resolveAddressNetworkFamily(network) === 'mainnet';
+		    } catch {
+		      return false;
+		    }
 		  }
 
 		  /**
@@ -5390,11 +5586,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		   * @returns {boolean} True if testnet
 		   */
 		  static isTestnet(network) {
-		    return network === 'xna-test' ||
-		      network === 'testnet' ||
-		      network === 'regtest' ||
-		      network === 'xna-pq-test' ||
-		      network === 'testnet-pq';
+		    try {
+		      return resolveAddressNetworkFamily(network) === 'testnet';
+		    } catch {
+		      return false;
+		    }
 		  }
 		}
 
@@ -5750,6 +5946,303 @@ var NeuraiAssetsBundle = (function (exports) {
 	}
 
 	/**
+	 * Fee / size helpers for Neurai transactions.
+	 *
+	 * These constants and classifiers are the same ones exposed by
+	 * `@neuraiproject/neurai-sign-transaction` (`VBYTES`, `isPQAddress`,
+	 * `isPQScript`, `estimateInputVbytes`, `estimateOutputBytes`,
+	 * `estimateTransactionVbytes`). They are inlined here to keep the assets
+	 * package light: depending on the full signer would pull `bitcoinjs-lib`
+	 * and `@noble/post-quantum` into the IIFE / browser bundles, which is far
+	 * more weight than the few constants we actually need for fee estimation.
+	 *
+	 * SOURCE OF TRUTH: `@neuraiproject/neurai-sign-transaction` `src/estimate.ts`.
+	 * Keep these values in sync with the signer's `VBYTES`. Mismatches surface
+	 * immediately as `min relay fee not met` failures from the node.
+	 */
+
+	var feeSizing;
+	var hasRequiredFeeSizing;
+
+	function requireFeeSizing () {
+		if (hasRequiredFeeSizing) return feeSizing;
+		hasRequiredFeeSizing = 1;
+		const ct = requireDist_1();
+
+		/** Per-component byte sizes used across the Neurai stack for fee estimation. */
+		const VBYTES = Object.freeze({
+		  /** Raw transaction overhead: version (4) + in-count varint (1) + out-count varint (1) + locktime (4). */
+		  baseTxOverheadBytes: 10,
+		  /** Extra weight contributed by the segwit marker + flag bytes when any input is a witness input. */
+		  segwitMarkerVbytes: 1,
+		  /** vbytes for a typical legacy P2PKH input (worst-case scriptSig). */
+		  legacyInputVbytes: 148,
+		  /**
+		   * vbytes for a PQ input: strict PQ witness v2, or generic AuthScript v1 with
+		   * a PQ key and the default OP_TRUE witnessScript.
+		   */
+		  pqInputVbytes: 977,
+		  /** vbytes for a strict ECDSA witness v3 input (worst-case signature). */
+		  ecdsaWitnessInputVbytes: 70,
+		  /** Bytes of a legacy P2PKH output (8-byte value + 1-byte script length + 25-byte scriptPubKey). */
+		  legacyOutputBytes: 34,
+		  /** Bytes of any AuthScript output, OP_1/OP_2/OP_3 (8-byte value + 1-byte script length + 34-byte scriptPubKey). */
+		  witnessOutputBytes: 43,
+		  /** @deprecated Same as `witnessOutputBytes`. */
+		  pqOutputBytes: 43,
+		});
+
+		/**
+		 * Destination kind of an address: 'p2pkh', 'authscript' (generic v1,
+		 * `nc1p…`), 'pq' (strict v2, `pq1z…`), 'ecdsa' (strict v3, `nq1r…`) or
+		 * 'unknown' when it does not decode.
+		 */
+		function getAddressKind(address) {
+		  if (typeof address !== 'string' || address.length === 0) return 'unknown';
+		  try {
+		    return ct.decodeAddress(address).type;
+		  } catch {
+		    return 'unknown';
+		  }
+		}
+
+		/** Destination kind of a hex scriptPubKey, ignoring a trailing asset wrapper. */
+		function getScriptKind(scriptHex) {
+		  if (typeof scriptHex !== 'string' || scriptHex.length < 4 || scriptHex.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(scriptHex)) {
+		    return 'unknown';
+		  }
+		  return ct.classifyScriptPubKey(scriptHex).type;
+		}
+
+		function isWitnessKind(kind) {
+		  return kind === 'authscript' || kind === 'pq' || kind === 'ecdsa';
+		}
+
+		/**
+		 * True for the addresses whose spend carries an ML-DSA-44 witness: strict PQ
+		 * v2 (`pq1z…`) and generic AuthScript v1 (`nc1p…`). `nq1…` is ECDSA witness
+		 * v3 and returns false.
+		 */
+		function isPQAddress(address) {
+		  const kind = getAddressKind(address);
+		  return kind === 'pq' || kind === 'authscript';
+		}
+
+		/** True for `OP_1` / `OP_2` scriptPubKeys with a 32-byte program (`5120…` / `5220…`). */
+		function isPQScript(scriptHex) {
+		  const kind = getScriptKind(scriptHex);
+		  return kind === 'pq' || kind === 'authscript';
+		}
+
+		function inputVbytesForKind(kind) {
+		  if (kind === 'pq' || kind === 'authscript') return VBYTES.pqInputVbytes;
+		  if (kind === 'ecdsa') return VBYTES.ecdsaWitnessInputVbytes;
+		  return VBYTES.legacyInputVbytes;
+		}
+
+		function inputKind(utxo) {
+		  const script = utxo && utxo.script;
+		  if (typeof script === 'string' && script.length > 0) {
+		    return getScriptKind(script);
+		  }
+		  return getAddressKind(utxo && utxo.address);
+		}
+
+		/**
+		 * Estimate the vbytes contributed by spending one UTXO. Uses the UTXO's
+		 * `script` if available, otherwise falls back to its `address`. Unknown
+		 * prevouts are treated as legacy.
+		 */
+		function estimateInputVbytes(utxo) {
+		  return inputVbytesForKind(inputKind(utxo));
+		}
+
+		/**
+		 * Encoders that produce the exact scriptPubKey the node will see.
+		 *
+		 * Sizing asset outputs from a hand-written byte formula drifted: the owner
+		 * token a reissue RETURNS is serialized as a transfer (it carries an amount),
+		 * not as the owner payload an issuance CREATES, and the null-asset-data
+		 * outputs of tag/freeze were not counted at all — those outputs are not
+		 * P2PKH-plus-payload, they replace the destination script entirely. The result
+		 * was twelve of eighteen operations budgeting below what the node charges.
+		 *
+		 * Asking the serializer is the only way to keep this from drifting again: the
+		 * numbers below are not a model of the encoding, they ARE the encoding.
+		 */
+		/** Bytes a CompactSize length prefix occupies for `n`. */
+		function compactSizeBytes(n) {
+		  if (n < 253) return 1;
+		  if (n <= 0xffff) return 3;
+		  if (n <= 0xffffffff) return 5;
+		  return 9;
+		}
+
+		/** An IPFS hash of the right LENGTH; only its size matters here. */
+		const IPFS_PLACEHOLDER = 'Qm' + 'a'.repeat(44);
+
+		/**
+		 * The exact scriptPubKey for an asset-bearing output descriptor, or null when
+		 * the descriptor names no asset operation.
+		 *
+		 * Values are placeholders on purpose: every field the amount or the flag lands
+		 * in is fixed-width, so a zero costs the same bytes as the real number. The
+		 * name, the address and the presence of IPFS are the only things that move the
+		 * size, and those come from the descriptor.
+		 *
+		 * @param {object} descriptor - Output descriptor
+		 * @returns {Uint8Array|null} Encoded script, or null
+		 */
+		function assetOutputScript(descriptor) {
+		  const { address, assetName, kind = 'transfer' } = descriptor;
+		  const ipfs = descriptor.hasIpfs ? (descriptor.ipfsHash || IPFS_PLACEHOLDER) : undefined;
+
+		  switch (kind) {
+		    case 'owner':
+		      return ct.encodeOwnerAssetScript(address, assetName);
+		    case 'issue':
+		      return ct.encodeNewAssetScript(address, assetName, 0n, 0, true, ipfs);
+		    case 'reissue':
+		      return ct.encodeReissueAssetScript(address, assetName, 0n, undefined, true, ipfs);
+		    case 'tag':
+		      return ct.encodeNullAssetTagScript(address, assetName, 'tag');
+		    case 'restriction':
+		      return ct.encodeNullAssetRestrictionScript(address, assetName, 1);
+		    case 'globalRestriction':
+		      return ct.encodeGlobalRestrictionScript(assetName, 1);
+		    case 'verifier':
+		      return ct.encodeVerifierStringScript(descriptor.verifierString || '');
+		    case 'transfer':
+		      return ct.encodeAssetTransferScript(address, assetName, 0n);
+		    default:
+		      return null;
+		  }
+		}
+
+		/**
+		 * Kinds whose script REPLACES the destination rather than extending it.
+		 *
+		 * A tag, a restriction or a verifier string is not "a payment with a payload
+		 * bolted on": there is no P2PKH to pay. Adding a destination's bytes to these
+		 * over-counts; treating them as plain destinations, which is what the builders
+		 * used to do, under-counts by far more.
+		 */
+		const STANDALONE_KINDS = new Set(['tag', 'restriction', 'globalRestriction', 'verifier']);
+
+		/**
+		 * Fallback used only when the encoders cannot express a descriptor — an
+		 * address family they do not accept, say. Keeps the previous behaviour rather
+		 * than throwing in the middle of a fee estimate.
+		 */
+		function assetPayloadBytesApprox(descriptor) {
+		  const nameLength = String(descriptor.assetName || '').length;
+		  const kind = descriptor.kind || 'transfer';
+		  let payload = 5 + nameLength;
+		  if (kind === 'issue') payload += 11;
+		  else if (kind === 'reissue') payload += 10;
+		  else if (kind !== 'owner') payload += 8;
+		  if (descriptor.hasIpfs) payload += 34;
+		  return 1 + (payload > 75 ? 2 : 1) + payload + 1;
+		}
+
+		/**
+		 * Bytes an asset payload adds on top of a plain destination output.
+		 *
+		 * Kept for callers that only want the delta. Standalone kinds have no
+		 * destination to add to, so this is not meaningful for them.
+		 *
+		 * @param {object} descriptor - Output descriptor with `assetName` and `kind`
+		 * @returns {number} Extra bytes, or 0 when the output carries no asset payload
+		 */
+		function assetPayloadBytes(descriptor) {
+		  if (!descriptor || typeof descriptor !== 'object' || !descriptor.assetName) {
+		    return 0;
+		  }
+		  try {
+		    const script = assetOutputScript(descriptor);
+		    if (!script) return 0;
+		    const base = isWitnessKind(getAddressKind(descriptor.address)) ? 34 : 25;
+		    return script.length - base;
+		  } catch {
+		    return assetPayloadBytesApprox(descriptor);
+		  }
+		}
+
+		/**
+		 * Estimate the bytes contributed by an output.
+		 *
+		 * Accepts an address string, `{ address }`, or an asset-aware descriptor
+		 * `{ address, assetName, kind, hasIpfs }` where `kind` is one of `transfer`
+		 * (default), `owner`, `issue` or `reissue`.
+		 *
+		 * @param {string|object} target - Output descriptor
+		 * @returns {number} Estimated bytes
+		 */
+		function estimateOutputBytes(target) {
+		  if (typeof target !== 'string' && target && (target.assetName || target.kind === 'verifier')) {
+		    try {
+		      const script = assetOutputScript(target);
+		      if (script) {
+		        // value(8) + CompactSize(scriptLen) + script
+		        return 8 + compactSizeBytes(script.length) + script.length;
+		      }
+		    } catch {
+		      // fall through to the approximation
+		    }
+		    if (STANDALONE_KINDS.has(target.kind)) {
+		      return VBYTES.legacyOutputBytes;
+		    }
+		    const base = isWitnessKind(getAddressKind(target.address)) ? VBYTES.witnessOutputBytes : VBYTES.legacyOutputBytes;
+		    return base + assetPayloadBytesApprox(target);
+		  }
+
+		  const address =
+		    typeof target === 'string' ? target : (target && target.address) || '';
+		  return isWitnessKind(getAddressKind(address)) ? VBYTES.witnessOutputBytes : VBYTES.legacyOutputBytes;
+		}
+
+		/**
+		 * Sum the per-input/per-output contributions, plus base overhead and segwit
+		 * marker (added once when any input is a witness input). Inputs may be
+		 * partial UTXO-like objects with `script` and/or `address`. Outputs may be
+		 * address strings or `{ address }` descriptors.
+		 */
+		function estimateTransactionVbytes(inputs, outputs) {
+		  let vbytes = VBYTES.baseTxOverheadBytes;
+		  let hasWitnessInput = false;
+
+		  for (const inp of inputs) {
+		    const kind = inputKind(inp);
+		    vbytes += inputVbytesForKind(kind);
+		    if (isWitnessKind(kind)) hasWitnessInput = true;
+		  }
+
+		  for (const out of outputs) {
+		    vbytes += estimateOutputBytes(out);
+		  }
+
+		  if (hasWitnessInput) vbytes += VBYTES.segwitMarkerVbytes;
+
+		  return vbytes;
+		}
+
+		feeSizing = {
+		  VBYTES,
+		  compactSizeBytes,
+		  assetOutputScript,
+		  getAddressKind,
+		  getScriptKind,
+		  isPQAddress,
+		  isPQScript,
+		  estimateInputVbytes,
+		  estimateOutputBytes,
+		  assetPayloadBytes,
+		  estimateTransactionVbytes,
+		};
+		return feeSizing;
+	}
+
+	/**
 	 * Utils Module
 	 * Exports all utility classes
 	 */
@@ -5765,13 +6258,15 @@ var NeuraiAssetsBundle = (function (exports) {
 		const NetworkDetector = requireNetworkDetector();
 		const OutputFormatter = requireOutputFormatter();
 		const AssetAmount = requireAssetAmount();
+		const FeeSizing = requireFeeSizing();
 
 		utils$1 = {
 		  AssetNameParser,
 		  AmountConverter,
 		  NetworkDetector,
 		  OutputFormatter,
-		  AssetAmount
+		  AssetAmount,
+		  FeeSizing
 		};
 		return utils$1;
 	}
@@ -6054,260 +6549,6 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		OwnerTokenManager_1 = OwnerTokenManager;
 		return OwnerTokenManager_1;
-	}
-
-	/**
-	 * Fee / size helpers for Neurai transactions.
-	 *
-	 * These constants and classifiers are the same ones exposed by
-	 * `@neuraiproject/neurai-sign-transaction` (`VBYTES`, `isPQAddress`,
-	 * `isPQScript`, `estimateInputVbytes`, `estimateOutputBytes`,
-	 * `estimateTransactionVbytes`). They are inlined here to keep the assets
-	 * package light: depending on the full signer would pull `bitcoinjs-lib`
-	 * and `@noble/post-quantum` into the IIFE / browser bundles, which is far
-	 * more weight than the few constants we actually need for fee estimation.
-	 *
-	 * SOURCE OF TRUTH: `@neuraiproject/neurai-sign-transaction` `src/estimate.ts`.
-	 * Keep these values in sync with the signer's `VBYTES`. Mismatches surface
-	 * immediately as `min relay fee not met` failures from the node.
-	 */
-
-	var feeSizing;
-	var hasRequiredFeeSizing;
-
-	function requireFeeSizing () {
-		if (hasRequiredFeeSizing) return feeSizing;
-		hasRequiredFeeSizing = 1;
-		/** Per-component byte sizes used across the Neurai stack for fee estimation. */
-		const VBYTES = Object.freeze({
-		  /** Raw transaction overhead: version (4) + in-count varint (1) + out-count varint (1) + locktime (4). */
-		  baseTxOverheadBytes: 10,
-		  /** Extra weight contributed by the segwit marker + flag bytes when any input is PQ. */
-		  segwitMarkerVbytes: 1,
-		  /** vbytes for a typical legacy P2PKH input (worst-case scriptSig). */
-		  legacyInputVbytes: 148,
-		  /** vbytes for a typical PQ AuthScript input with the default OP_TRUE witnessScript. */
-		  pqInputVbytes: 977,
-		  /** Bytes of a legacy P2PKH output (8-byte value + 1-byte script length + 25-byte scriptPubKey). */
-		  legacyOutputBytes: 34,
-		  /** Bytes of an AuthScript-v1 output (8-byte value + 1-byte script length + 34-byte scriptPubKey). */
-		  pqOutputBytes: 43,
-		});
-
-		/** True for Neurai PQ AuthScript bech32 destinations (`nq1…` mainnet, `tnq1…` testnet). */
-		function isPQAddress(address) {
-		  return (
-		    typeof address === 'string' &&
-		    (address.startsWith('nq1') || address.startsWith('tnq1'))
-		  );
-		}
-
-		/** True for AuthScript-v1 scriptPubKey hex (witness v1, 32-byte program — `5120…`). */
-		function isPQScript(scriptHex) {
-		  if (typeof scriptHex !== 'string' || scriptHex.length < 4) return false;
-		  return scriptHex.toLowerCase().startsWith('5120');
-		}
-
-		/**
-		 * Estimate the vbytes contributed by spending one UTXO. Uses the UTXO's
-		 * `script` if available, otherwise falls back to its `address`. Unknown
-		 * prevouts are treated as legacy.
-		 */
-		function estimateInputVbytes(utxo) {
-		  const script = utxo && utxo.script;
-		  if (typeof script === 'string' && script.length > 0) {
-		    return isPQScript(script) ? VBYTES.pqInputVbytes : VBYTES.legacyInputVbytes;
-		  }
-		  const address = utxo && utxo.address;
-		  if (typeof address === 'string' && isPQAddress(address)) {
-		    return VBYTES.pqInputVbytes;
-		  }
-		  return VBYTES.legacyInputVbytes;
-		}
-
-		/**
-		 * Encoders that produce the exact scriptPubKey the node will see.
-		 *
-		 * Sizing asset outputs from a hand-written byte formula drifted: the owner
-		 * token a reissue RETURNS is serialized as a transfer (it carries an amount),
-		 * not as the owner payload an issuance CREATES, and the null-asset-data
-		 * outputs of tag/freeze were not counted at all — those outputs are not
-		 * P2PKH-plus-payload, they replace the destination script entirely. The result
-		 * was twelve of eighteen operations budgeting below what the node charges.
-		 *
-		 * Asking the serializer is the only way to keep this from drifting again: the
-		 * numbers below are not a model of the encoding, they ARE the encoding.
-		 */
-		const ct = requireDist_1();
-
-		/** Bytes a CompactSize length prefix occupies for `n`. */
-		function compactSizeBytes(n) {
-		  if (n < 253) return 1;
-		  if (n <= 0xffff) return 3;
-		  if (n <= 0xffffffff) return 5;
-		  return 9;
-		}
-
-		/** An IPFS hash of the right LENGTH; only its size matters here. */
-		const IPFS_PLACEHOLDER = 'Qm' + 'a'.repeat(44);
-
-		/**
-		 * The exact scriptPubKey for an asset-bearing output descriptor, or null when
-		 * the descriptor names no asset operation.
-		 *
-		 * Values are placeholders on purpose: every field the amount or the flag lands
-		 * in is fixed-width, so a zero costs the same bytes as the real number. The
-		 * name, the address and the presence of IPFS are the only things that move the
-		 * size, and those come from the descriptor.
-		 *
-		 * @param {object} descriptor - Output descriptor
-		 * @returns {Uint8Array|null} Encoded script, or null
-		 */
-		function assetOutputScript(descriptor) {
-		  const { address, assetName, kind = 'transfer' } = descriptor;
-		  const ipfs = descriptor.hasIpfs ? (descriptor.ipfsHash || IPFS_PLACEHOLDER) : undefined;
-
-		  switch (kind) {
-		    case 'owner':
-		      return ct.encodeOwnerAssetScript(address, assetName);
-		    case 'issue':
-		      return ct.encodeNewAssetScript(address, assetName, 0n, 0, true, ipfs);
-		    case 'reissue':
-		      return ct.encodeReissueAssetScript(address, assetName, 0n, undefined, true, ipfs);
-		    case 'tag':
-		      return ct.encodeNullAssetTagScript(address, assetName, 'tag');
-		    case 'restriction':
-		      return ct.encodeNullAssetRestrictionScript(address, assetName, 1);
-		    case 'globalRestriction':
-		      return ct.encodeGlobalRestrictionScript(assetName, 1);
-		    case 'verifier':
-		      return ct.encodeVerifierStringScript(descriptor.verifierString || '');
-		    case 'transfer':
-		      return ct.encodeAssetTransferScript(address, assetName, 0n);
-		    default:
-		      return null;
-		  }
-		}
-
-		/**
-		 * Kinds whose script REPLACES the destination rather than extending it.
-		 *
-		 * A tag, a restriction or a verifier string is not "a payment with a payload
-		 * bolted on": there is no P2PKH to pay. Adding a destination's bytes to these
-		 * over-counts; treating them as plain destinations, which is what the builders
-		 * used to do, under-counts by far more.
-		 */
-		const STANDALONE_KINDS = new Set(['tag', 'restriction', 'globalRestriction', 'verifier']);
-
-		/**
-		 * Fallback used only when the encoders cannot express a descriptor — an
-		 * address family they do not accept, say. Keeps the previous behaviour rather
-		 * than throwing in the middle of a fee estimate.
-		 */
-		function assetPayloadBytesApprox(descriptor) {
-		  const nameLength = String(descriptor.assetName || '').length;
-		  const kind = descriptor.kind || 'transfer';
-		  let payload = 5 + nameLength;
-		  if (kind === 'issue') payload += 11;
-		  else if (kind === 'reissue') payload += 10;
-		  else if (kind !== 'owner') payload += 8;
-		  if (descriptor.hasIpfs) payload += 34;
-		  return 1 + (payload > 75 ? 2 : 1) + payload + 1;
-		}
-
-		/**
-		 * Bytes an asset payload adds on top of a plain destination output.
-		 *
-		 * Kept for callers that only want the delta. Standalone kinds have no
-		 * destination to add to, so this is not meaningful for them.
-		 *
-		 * @param {object} descriptor - Output descriptor with `assetName` and `kind`
-		 * @returns {number} Extra bytes, or 0 when the output carries no asset payload
-		 */
-		function assetPayloadBytes(descriptor) {
-		  if (!descriptor || typeof descriptor !== 'object' || !descriptor.assetName) {
-		    return 0;
-		  }
-		  try {
-		    const script = assetOutputScript(descriptor);
-		    if (!script) return 0;
-		    const base = isPQAddress(descriptor.address) ? 34 : 25;
-		    return script.length - base;
-		  } catch {
-		    return assetPayloadBytesApprox(descriptor);
-		  }
-		}
-
-		/**
-		 * Estimate the bytes contributed by an output.
-		 *
-		 * Accepts an address string, `{ address }`, or an asset-aware descriptor
-		 * `{ address, assetName, kind, hasIpfs }` where `kind` is one of `transfer`
-		 * (default), `owner`, `issue` or `reissue`.
-		 *
-		 * @param {string|object} target - Output descriptor
-		 * @returns {number} Estimated bytes
-		 */
-		function estimateOutputBytes(target) {
-		  if (typeof target !== 'string' && target && (target.assetName || target.kind === 'verifier')) {
-		    try {
-		      const script = assetOutputScript(target);
-		      if (script) {
-		        // value(8) + CompactSize(scriptLen) + script
-		        return 8 + compactSizeBytes(script.length) + script.length;
-		      }
-		    } catch {
-		      // fall through to the approximation
-		    }
-		    if (STANDALONE_KINDS.has(target.kind)) {
-		      return VBYTES.legacyOutputBytes;
-		    }
-		    const base = isPQAddress(target.address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
-		    return base + assetPayloadBytesApprox(target);
-		  }
-
-		  const address =
-		    typeof target === 'string' ? target : (target && target.address) || '';
-		  return isPQAddress(address) ? VBYTES.pqOutputBytes : VBYTES.legacyOutputBytes;
-		}
-
-		/**
-		 * Sum the per-input/per-output contributions, plus base overhead and segwit
-		 * marker (added once when any input is PQ). Inputs may be partial UTXO-like
-		 * objects with `script` and/or `address`. Outputs may be address strings or
-		 * `{ address }` descriptors.
-		 */
-		function estimateTransactionVbytes(inputs, outputs) {
-		  let vbytes = VBYTES.baseTxOverheadBytes;
-		  let hasPQInput = false;
-
-		  for (const inp of inputs) {
-		    const v = estimateInputVbytes(inp);
-		    vbytes += v;
-		    if (v === VBYTES.pqInputVbytes) hasPQInput = true;
-		  }
-
-		  for (const out of outputs) {
-		    vbytes += estimateOutputBytes(out);
-		  }
-
-		  if (hasPQInput) vbytes += VBYTES.segwitMarkerVbytes;
-
-		  return vbytes;
-		}
-
-		feeSizing = {
-		  VBYTES,
-		  compactSizeBytes,
-		  assetOutputScript,
-		  isPQAddress,
-		  isPQScript,
-		  estimateInputVbytes,
-		  estimateOutputBytes,
-		  assetPayloadBytes,
-		  estimateTransactionVbytes,
-		};
-		return feeSizing;
 	}
 
 	var UTXOSelector_1;

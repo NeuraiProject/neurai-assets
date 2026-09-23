@@ -3,8 +3,7 @@
  * Different addresses for mainnet and testnet
  */
 
-const MAINNET_NETWORKS = ['xna', 'mainnet', 'xna-pq', 'mainnet-pq'];
-const TESTNET_NETWORKS = ['xna-test', 'testnet', 'regtest', 'xna-pq-test', 'testnet-pq'];
+const { MAINNET_NETWORKS, TESTNET_NETWORKS } = require('./networks');
 
 function resolveNetworkFamily(network) {
   if (MAINNET_NETWORKS.includes(network)) {

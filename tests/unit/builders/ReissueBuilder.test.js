@@ -3,7 +3,7 @@ const { bech32m } = require('bech32');
 const ReissueBuilder = require('../../../src/builders/ReissueBuilder');
 const { parseUnsignedOutputs, assetPayloads } = require('../../fixtures/txParser');
 
-const TEST_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
+const TEST_ADDRESS = bech32m.encode('tnc', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
 
 /**
  * Build an in-memory RPC stub for ReissueBuilder tests.

@@ -4,8 +4,8 @@ const TransferBuilder = require('../../../src/builders/TransferBuilder');
 const NeuraiAssets = require('../../../src/NeuraiAssets');
 const { OwnerTokenNotFoundError } = require('../../../src/errors');
 
-const TEST_ADDRESS = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
-const RECIPIENT = bech32m.encode('tnq', [1, ...bech32m.toWords(Buffer.alloc(32, 9))]);
+const TEST_ADDRESS = bech32m.encode('tnc', [1, ...bech32m.toWords(Buffer.alloc(32, 7))]);
+const RECIPIENT = bech32m.encode('tnc', [1, ...bech32m.toWords(Buffer.alloc(32, 9))]);
 
 /**
  * In-memory RPC stub for TransferBuilder tests.

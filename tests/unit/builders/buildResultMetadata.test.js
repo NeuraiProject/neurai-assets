@@ -8,8 +8,8 @@ describe('Build Result Metadata', () => {
   it('should expose burn and change metadata for root issuance', async () => {
     const toWords = bech32m.toWords(Buffer.alloc(32, 1));
     const changeWords = bech32m.toWords(Buffer.alloc(32, 2));
-    const toAddress = bech32m.encode('tnq', [1, ...toWords]);
-    const changeAddress = bech32m.encode('tnq', [1, ...changeWords]);
+    const toAddress = bech32m.encode('tnc', [1, ...toWords]);
+    const changeAddress = bech32m.encode('tnc', [1, ...changeWords]);
 
     const rpc = async (method, params = []) => {
       switch (method) {
@@ -88,7 +88,7 @@ describe('Build Result Metadata', () => {
 
   it('should keep localRawBuild compatible when mixing legacy and AuthScript destinations', async () => {
     const authScriptWords = bech32m.toWords(Buffer.alloc(32, 3));
-    const authScriptAddress = bech32m.encode('tnq', [1, ...authScriptWords]);
+    const authScriptAddress = bech32m.encode('tnc', [1, ...authScriptWords]);
     const legacyAddress = 't7pvKtaVzbcsUijMT3z8KA4bkF1XxUiKqN';
 
     const rpc = async (method, params = []) => {
