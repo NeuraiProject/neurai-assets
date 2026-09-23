@@ -1132,6 +1132,19 @@ remain available as `totalSats` / raw methods; never use a rounded display value
 as a new transaction input.
 
 
+## 1.7.2: CommonJS type declarations
+
+`require()` loads `dist/index.cjs`, but the package only published the ESM
+declarations (`index.d.ts`), so a CommonJS file compiled with
+`moduleResolution: "node16"` got `TS1471` and no types. The `require`
+condition now has its own declarations, `dist/index.d.cts`, written by the
+build from `index.d.ts` (both entry points export the same values, with
+`default === NeuraiAssets`). No runtime or API change. `npm run test:types`
+also compiles ESM, CommonJS and browser consumers against the declarations
+(NodeNext, Node16, Bundler; `skipLibCheck: false`), and `npm run
+test:package` checks the packed tarball in a clean project, with TypeScript
+4.7 too.
+
 ## 1.7.1: type declarations
 
 `index.d.ts` exported `AssetQueries` twice (`export class AssetQueries` plus

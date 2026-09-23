@@ -11,5 +11,5 @@
     "target": "ES2022",
     "types": []
   },
-  "files": ["index.d.ts"]
+  "files": ["index.d.ts", "dist/index.d.cts"]
 }
