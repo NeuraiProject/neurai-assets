@@ -1,0 +1,15 @@
+{
+  // Checks the published declarations themselves. tsconfig.types.json uses
+  // skipLibCheck, which skips index.d.ts; consumers compiling with tsc's
+  // default (skipLibCheck: false) do see its errors.
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "types": []
+  },
+  "files": ["index.d.ts"]
+}

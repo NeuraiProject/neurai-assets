@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-assets",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Non-custodial Neurai asset management library for JavaScript",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -31,7 +31,7 @@
     "test:integration": "mocha ./tests/integration/**/*.test.js",
     "test:browser": "npm run build && mocha ./tests/browser/**/*.test.js",
     "test:watch": "mocha --watch ./tests/**/*.test.js",
-    "test:types": "tsc -p tsconfig.types.json"
+    "test:types": "tsc -p tsconfig.types.json && tsc -p tsconfig.dts.json"
   },
   "repository": {
     "type": "git",

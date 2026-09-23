@@ -1132,6 +1132,16 @@ remain available as `totalSats` / raw methods; never use a rounded display value
 as a new transaction input.
 
 
+## 1.7.1: type declarations
+
+`index.d.ts` exported `AssetQueries` twice (`export class AssetQueries` plus
+the `export { … }` list). TypeScript consumers compiling with
+`skipLibCheck: false`, tsc's default, got `TS2323` / `TS2484` errors from the
+package and a failing build; types and runtime were otherwise unaffected. The
+class is now declared once and exported once, like `NeuraiAssets`, and
+`npm run test:types` also checks the declarations with `skipLibCheck: false`
+(`tsconfig.dts.json`). No runtime change.
+
 ## 1.7.0: address types of neurai-key 5
 
 - Every Neurai address family is accepted: generic AuthScript v1 `nc1p…` /

@@ -403,7 +403,7 @@ export interface DepinValidityResult {
   [key: string]: unknown;
 }
 
-export class AssetQueries {
+declare class AssetQueries {
   constructor(rpc: (method: string, params?: unknown[]) => Promise<unknown> | unknown);
   getAssetData(assetName: string): Promise<Record<string, unknown>>;
   listAssets(filter?: string, verbose?: boolean, count?: number, start?: number): Promise<unknown>;
