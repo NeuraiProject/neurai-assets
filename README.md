@@ -37,6 +37,18 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 > (full name, owner `!` included: 31 mainnet / 121 testnet-regtest, validated
 > against a regtest node); peer `neurai-rpc ^0.6.0`.
 
+## 1.8.2: Transfer amounts given as decimal strings
+
+`transferAsset` failed with `Invalid parameter, missing or invalid quantity`
+on nodes before Neurai-DePIN `9834b03` (mainnet and testnet at the time of
+writing) when a recipient `amount` was a decimal string such as `"5"`, or when
+the asset change back to the sender was one that no JavaScript number carries
+exactly (the builder writes those as text). Those nodes read the amounts of
+`transfer` and `transferwithmessage` only from JSON numbers, like
+`asset_quantity`. They are now converted the same way as in 1.8.1, on the copy
+sent to the node; `message` and `expire_time` are left untouched. Numeric
+amounts are unchanged.
+
 ## 1.8.1: Issue quantities given as decimal strings
 
 `createRootAsset`, `createSubAsset`, `createDepinAsset` and
@@ -98,12 +110,13 @@ via `CheckAmountWithUnits`. Because the chain already does the ×10⁸ scaling
 itself, **the library must NOT pre-multiply** the value. Sending the raw
 display number is the only correct behavior; any extra factor on the wire
 either silently inflates the minted supply (`× 10⁸ → 100,000,000` tokens
-where the user asked for 1) or trips the daemon's
-`ParseFixedPoint` cap with `Invalid amount (3): …`.
+where the user asked for 1) or falls outside the range the daemon's amount
+parser accepts, with `Invalid amount (3): …`.
 
-A quantity can be a number or a plain decimal string (`"1000.25"`). A string
-keeps every digit; it is sent to the node as a JSON number, which is the only
-form `createrawtransaction` accepts for `asset_quantity`. A decimal that no
+A quantity or transfer amount can be a number or a plain decimal string
+(`"1000.25"`). A string keeps every digit; it is sent to the node as a JSON
+number, the only form nodes before Neurai-DePIN `9834b03` accept for asset
+amounts in `createrawtransaction` (newer nodes accept both). A decimal that no
 JavaScript number carries exactly is sent as an exact token, which requires
 the RPC function to serialize with `@neuraiproject/neurai-rpc` (its
 `getRPC()` does); any other serializer makes the node reject the call instead

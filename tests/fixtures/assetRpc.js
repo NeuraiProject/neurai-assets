@@ -88,11 +88,16 @@ function createAssetRpc(options = {}) {
 }
 
 /**
- * The node reads these operation fields with `isNum()` (rpc/rawtransaction.cpp)
- * and rejects anything else, a quoted decimal included. A value flagged
- * `isLosslessNumber` counts as a number: neurai-rpc writes it as a bare token.
+ * Nodes before Neurai-DePIN 9834b03 read these amounts with `isNum()`
+ * (rpc/rawtransaction.cpp) and reject anything else, a quoted decimal
+ * included: `asset_quantity` / `change_quantity`, and the amounts of
+ * `transfer` / `transferwithmessage`. The stand-in follows those nodes, the
+ * strictest ones still serving. A value flagged `isLosslessNumber` counts as a
+ * number: neurai-rpc writes it as a bare token.
  */
 const NODE_NUMERIC_FIELDS = ['asset_quantity', 'change_quantity'];
+const NODE_TRANSFER_OPERATIONS = ['transfer', 'transferwithmessage'];
+const NODE_TRANSFER_NON_AMOUNT_KEYS = ['message', 'expire_time'];
 
 function isJsonNumber(value) {
   return typeof value === 'number' || (value !== null && typeof value === 'object' && value.isLosslessNumber === true);
@@ -103,8 +108,16 @@ function assertNodeNumericFields(outputs) {
   for (const output of list) {
     for (const payload of Object.values(output || {})) {
       if (!payload || typeof payload !== 'object') continue;
-      for (const params of Object.values(payload)) {
+      for (const [operation, params] of Object.entries(payload)) {
         if (!params || typeof params !== 'object') continue;
+        if (NODE_TRANSFER_OPERATIONS.includes(operation)) {
+          for (const [key, value] of Object.entries(params)) {
+            if (!NODE_TRANSFER_NON_AMOUNT_KEYS.includes(key) && !isJsonNumber(value)) {
+              throw new Error('Invalid parameter, missing or invalid quantity');
+            }
+          }
+          continue;
+        }
         for (const field of NODE_NUMERIC_FIELDS) {
           if (params[field] !== undefined && !isJsonNumber(params[field])) {
             throw new Error(`Invalid parameter, missing asset data for key: ${field}`);

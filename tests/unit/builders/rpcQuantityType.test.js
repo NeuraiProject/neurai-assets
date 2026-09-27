@@ -1,12 +1,13 @@
 /**
- * Asset quantities reach `createrawtransaction` as JSON numbers.
+ * Asset amounts reach `createrawtransaction` as JSON numbers.
  *
- * The node reads `asset_quantity` and `change_quantity` with `isNum()` and
- * rejects a quoted value ("missing asset data for key: asset_quantity"). The
- * builders accept decimal strings, which keep every digit, so the conversion
- * happens on the copy sent to the node. The asset fixture enforces the node's
- * rule, and the payload is serialized here with neurai-rpc, as a wallet sends
- * it, to check the exact token.
+ * Nodes before Neurai-DePIN 9834b03 read `asset_quantity`, `change_quantity`
+ * and the `transfer` / `transferwithmessage` amounts with `isNum()` and reject
+ * a quoted value ("missing asset data for key: asset_quantity", "missing or
+ * invalid quantity"). The builders accept decimal strings, which keep every
+ * digit, so the conversion happens on the copy sent to the node. The asset
+ * fixture enforces those nodes' rule, and the payload is serialized here with
+ * neurai-rpc, as a wallet sends it, to check the exact token.
  */
 
 const { expect } = require('chai');
@@ -46,6 +47,14 @@ function findOperation(outputs, operation) {
     }
   }
   return null;
+}
+
+/** Every operation object of `operation` in a list of outputs, with its address. */
+function findOperations(outputs, operation) {
+  return outputs
+    .map(output => Object.entries(output)[0])
+    .filter(([, payload]) => payload && typeof payload === 'object' && payload[operation])
+    .map(([address, payload]) => ({ address, params: payload[operation] }));
 }
 
 /** The JSON token neurai-rpc sends for `field`. */
@@ -133,6 +142,50 @@ describe('createrawtransaction asset quantities', () => {
   });
 });
 
+describe('createrawtransaction transfer amounts', () => {
+  const holding = (assetName, satoshis) => ({
+    txid: 'c3'.repeat(32), outputIndex: 2, address: ADDR[0], assetName, satoshis
+  });
+
+  it('sends a transfer amount given as a string as a JSON number', async () => {
+    const { assets, rawTransactionParams } = assetsWith({ ownerUtxos: [holding('ROOTX', 1000 * 1e8)] });
+
+    const result = await assets.transferAsset({ assetName: 'ROOTX', recipients: [{ address: ADDR[1], amount: '5' }] });
+
+    const sent = findOperations(rawTransactionParams[0][1], 'transfer');
+    const toRecipient = sent.find(({ address }) => address === ADDR[1]);
+    expect(sentToken(toRecipient.params, 'ROOTX')).to.equal('5');
+    // The asset change back to the sender, computed by the builder.
+    const change = sent.find(({ address }) => address === ADDR[0]);
+    expect(sentToken(change.params, 'ROOTX')).to.equal('995');
+
+    const returned = findOperations(result.outputs, 'transfer').find(({ address }) => address === ADDR[1]);
+    expect(returned.params.ROOTX).to.equal('5');
+  });
+
+  it('sends an asset change that no JavaScript number carries as an exact token', async () => {
+    // 9876543210.12345678 held; the change after sending 1 has 18 digits.
+    const { assets, rawTransactionParams } = assetsWith({ ownerUtxos: [holding('ROOTX', '987654321012345678')] });
+
+    await assets.transferAsset({ assetName: 'ROOTX', recipients: [{ address: ADDR[1], amount: 1 }] });
+
+    const change = findOperations(rawTransactionParams[0][1], 'transfer').find(({ address }) => address === ADDR[0]);
+    expect(sentToken(change.params, 'ROOTX')).to.equal('9876543209.12345678');
+  });
+
+  it('sends a DePIN transfer, owner token included, with JSON numbers', async () => {
+    const { assets, rawTransactionParams } = assetsWith({
+      ownerUtxos: [holding('&SENSOR', 1000 * 1e8), { ...holding('&SENSOR!', 1e8), outputIndex: 3 }]
+    });
+
+    await assets.transferAsset({ assetName: '&SENSOR', recipients: [{ address: ADDR[1], amount: '5' }] });
+
+    const tokens = findOperations(rawTransactionParams[0][1], 'transfer')
+      .flatMap(({ params }) => Object.keys(params).map(name => `${name}=${sentToken(params, name)}`));
+    expect(tokens).to.have.members(['&SENSOR=5', '&SENSOR=995', '&SENSOR!=1']);
+  });
+});
+
 describe('toRpcAmount', () => {
   it('turns a decimal string into the number that writes it back exactly', () => {
     expect(toRpcAmount('1000')).to.equal(1000);
@@ -166,21 +219,24 @@ describe('toRpcAmount', () => {
 });
 
 describe('prepareOutputsForRpc', () => {
-  it('converts only the numeric asset fields, on a copy', () => {
+  it('converts only the asset amounts, on a copy', () => {
     const outputs = [
       { [ADDR[0]]: '12.5' },
-      { [ADDR[1]]: { transfer: { 'ROOTX!': '1' } } },
+      { [ADDR[1]]: { transfer: { 'ROOTX!': '1', ROOTX: '2.5' } } },
       { [ADDR[2]]: { tag_addresses: { tag_name: '#KYC', addresses: [ADDR[3]], change_quantity: '10' } } },
-      { [ADDR[3]]: { issue: { asset_name: 'ROOTX', asset_quantity: '1000', units: 0, reissuable: 1, has_ipfs: 0 } } }
+      { [ADDR[3]]: { issue: { asset_name: 'ROOTX', asset_quantity: '1000', units: 0, reissuable: 1, has_ipfs: 0 } } },
+      { [ADDR[4]]: { transferwithmessage: { ROOTX: '3', message: 'QmHash', expire_time: 1790000000 } } }
     ];
     const snapshot = JSON.stringify(outputs);
 
     const sent = prepareOutputsForRpc(outputs);
 
     expect(JSON.stringify(outputs)).to.equal(snapshot);
+    // XNA amounts stay as they are: the node reads them with AmountFromValue.
     expect(sent[0]).to.deep.equal({ [ADDR[0]]: '12.5' });
-    expect(sent[1]).to.deep.equal({ [ADDR[1]]: { transfer: { 'ROOTX!': '1' } } });
+    expect(sent[1]).to.deep.equal({ [ADDR[1]]: { transfer: { 'ROOTX!': 1, ROOTX: 2.5 } } });
     expect(sent[2][ADDR[2]].tag_addresses.change_quantity).to.equal(10);
+    expect(sent[4][ADDR[4]].transferwithmessage).to.deep.equal({ ROOTX: 3, message: 'QmHash', expire_time: 1790000000 });
     expect(sent[3][ADDR[3]].issue).to.deep.equal({
       asset_name: 'ROOTX', asset_quantity: 1000, units: 0, reissuable: 1, has_ipfs: 0
     });

@@ -1,13 +1,17 @@
 /**
  * Asset amounts as `createrawtransaction` must receive them.
  *
- * The node reads `asset_quantity` (issue, issue_restricted, issue_qualifier,
- * reissue, reissue_restricted) and `change_quantity` (qualifier and tag
- * operations) only from JSON numbers: a quoted value fails `isNum()` and the
- * call is rejected with "missing asset data for key: asset_quantity". The
- * builders accept these amounts as decimal strings, which keep every digit the
- * caller wrote, so they are turned into JSON numbers here, on the copy of the
- * outputs sent to the node. The outputs returned to the caller keep the value
+ * Nodes before Neurai-DePIN 9834b03 read every asset amount of
+ * `createrawtransaction` only from JSON numbers: `asset_quantity` (issue,
+ * issue_restricted, issue_qualifier, reissue, reissue_restricted),
+ * `change_quantity` (qualifier and tag operations) and the amounts of
+ * `transfer` and `transferwithmessage`. A quoted value fails `isNum()` and the
+ * call is rejected ("missing asset data for key: asset_quantity", "missing or
+ * invalid quantity"). The builders accept these amounts as decimal strings,
+ * which keep every digit the caller wrote, and produce some themselves (an
+ * asset change that no JavaScript number carries exactly), so they are turned
+ * into JSON numbers here, on the copy of the outputs sent to the node. Newer
+ * nodes accept both forms. The outputs returned to the caller keep the value
  * as it was given.
  */
 
@@ -20,6 +24,14 @@ const {
 
 /** Fields the node parses with `isNum()` inside an asset operation object. */
 const NUMERIC_OPERATION_FIELDS = ['asset_quantity', 'change_quantity'];
+
+/**
+ * Operations whose keys are asset names mapped to amounts. `transferwithmessage`
+ * also carries `message` (a string) and `expire_time` (an integer), which are
+ * not amounts and are left alone.
+ */
+const TRANSFER_OPERATIONS = ['transfer', 'transferwithmessage'];
+const TRANSFER_NON_AMOUNT_KEYS = ['message', 'expire_time'];
 
 /** The largest magnitude whose 8-decimal values a double still names exactly. */
 const MAX_EXACT_FRACTIONAL = Number.MAX_SAFE_INTEGER / 1e8;
@@ -77,10 +89,11 @@ function isPlainObject(value) {
 }
 
 /**
- * Copy of `createrawtransaction` outputs with the numeric asset fields
- * converted by {@link toRpcAmount}. XNA amounts and every other field are left
- * as they are: the node reads those with `AmountFromValue`, which also accepts
- * strings.
+ * Copy of `createrawtransaction` outputs with the asset amounts converted by
+ * {@link toRpcAmount}: `asset_quantity` and `change_quantity`, and the amounts
+ * of `transfer` / `transferwithmessage`. XNA amounts and every other field are
+ * left as they are: the node reads XNA amounts with `AmountFromValue`, which
+ * also accepts strings.
  *
  * @param {Array<object>|object} outputs - Outputs as built (array of single-key objects, or one object)
  * @returns {Array<object>|object} Outputs to send, same shape
@@ -97,9 +110,17 @@ function prepareOutputsForRpc(outputs) {
         continue;
       }
       const copy = { ...params };
-      for (const field of NUMERIC_OPERATION_FIELDS) {
-        if (copy[field] !== undefined && copy[field] !== null) {
-          copy[field] = toRpcAmount(copy[field], field);
+      if (TRANSFER_OPERATIONS.includes(operation)) {
+        for (const [key, value] of Object.entries(copy)) {
+          if (!TRANSFER_NON_AMOUNT_KEYS.includes(key) && value !== undefined && value !== null) {
+            copy[key] = toRpcAmount(value, `${operation} amount of ${key}`);
+          }
+        }
+      } else {
+        for (const field of NUMERIC_OPERATION_FIELDS) {
+          if (copy[field] !== undefined && copy[field] !== null) {
+            copy[field] = toRpcAmount(copy[field], field);
+          }
         }
       }
       converted[operation] = copy;

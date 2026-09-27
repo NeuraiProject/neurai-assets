@@ -349,8 +349,9 @@ class BaseAssetTransactionBuilder {
         vout: input.vout !== undefined ? input.vout : input.outputIndex
       }));
 
-      // Call createrawtransaction. The node only accepts the asset quantities
-      // as JSON numbers; the caller's outputs keep the values as given.
+      // Call createrawtransaction. Nodes before Neurai-DePIN 9834b03 only
+      // accept asset amounts as JSON numbers; the caller's outputs keep the
+      // values as given.
       const rawTx = await this.rpc('createrawtransaction', [
         formattedInputs,
         prepareOutputsForRpc(outputs)
@@ -485,8 +486,8 @@ class BaseAssetTransactionBuilder {
    *     (e.g. "1" for one token, "1.5" for one and a half tokens).
    *   - The lib must NOT pre-multiply by 10^8 or 10^units; the daemon
    *     does the 10^8 scaling itself, and any extra factor here lands
-   *     duplicated and inflates the minted supply (or trips the
-   *     ParseFixedPoint `exponent >= 18` cap → "Invalid amount (3)").
+   *     duplicated and inflates the minted supply (or falls outside the
+   *     range the node's amount parser accepts → "Invalid amount (3)").
    *
    * History: pre-1.2.2 multiplied by 10^units (correct only for units=0
    * assets, inflated everything else by 10^units). v1.2.2 changed to
