@@ -554,14 +554,13 @@ class BaseAssetTransactionBuilder {
    *   1. `params.assetMarker` (explicit caller override — offline builds,
    *      tests, or a node this library should not ask);
    *   2. `getblockchaininfo.asset_marker` from the connected node;
-   *   3. `'rvn'` when the node predates the field (a node without it enforces
-   *      the legacy marker, so that is the right answer, not a guess).
+   *   3. On mainnet, `'rvn'` when the field is absent. Testnet requires
+   *      the field or an explicit override.
    *
    * An RPC *failure* is a different case, and `params.assetMarkerPolicy`
    * decides it:
-   *   - `'legacy-fallback'` (default in 1.x) resolves `'rvn'`, preserving the
-   *     1.4.x behaviour;
-   *   - `'strict'` propagates the failure. On a post-NIP-040 chain a build
+   *   - `'legacy-fallback'` (mainnet default) resolves `'rvn'`;
+   *   - `'strict'` (testnet default) propagates the failure. On a post-NIP-040 chain a build
    *     that guessed `'rvn'` produces a transaction the node rejects with
    *     `bad-txns-legacy-asset-marker-after-nip040`, so an online wallet
    *     should not treat "the node did not answer" as "the node said rvn".
@@ -589,7 +588,7 @@ class BaseAssetTransactionBuilder {
   assetMarkerPolicy() {
     const policy = this.params.assetMarkerPolicy;
     if (policy === undefined || policy === null) {
-      return 'legacy-fallback';
+      return getNetworkConfig(this.network).baseNetwork === 'xna-test' ? 'strict' : 'legacy-fallback';
     }
     if (policy !== 'strict' && policy !== 'legacy-fallback') {
       throw new Error(
@@ -627,7 +626,9 @@ class BaseAssetTransactionBuilder {
     }
     const marker = info ? info.asset_marker : undefined;
     if (marker === undefined || marker === null) {
-      // A valid answer from a node that predates the field: legacy is correct.
+      if (getNetworkConfig(this.network).baseNetwork === 'xna-test') {
+        throw new Error('Testnet node did not report asset_marker; pass params.assetMarker for an offline build');
+      }
       return 'rvn';
     }
     if (marker !== 'rvn' && marker !== 'xna') {

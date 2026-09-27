@@ -1932,8 +1932,8 @@ function requireDist_1 () {
 	 * Every transfer / new / owner / reissue payload opens with a 3-byte marker
 	 * followed by the type byte. The marker is consensus: blocks below the NIP-040
 	 * activation height of a network only accept `rvn` on new asset outputs and
-	 * blocks at or above it only accept `xna` (mainnet: not scheduled; testnet:
-	 * 303000; regtest: 1). This library does NOT know chain state and never
+	 * blocks at or above it only accept `xna` (mainnet: not scheduled; reset testnet:
+	 * 10; regtest: 1). This library does NOT know chain state and never
 	 * infers the marker from a network or an address: the caller passes the
 	 * value reported by the node for the next block
 	 * (`getblockchaininfo.asset_marker`, node commit 347362b) — or, when building
@@ -8860,14 +8860,13 @@ function requireBaseAssetTransactionBuilder () {
 	   *   1. `params.assetMarker` (explicit caller override — offline builds,
 	   *      tests, or a node this library should not ask);
 	   *   2. `getblockchaininfo.asset_marker` from the connected node;
-	   *   3. `'rvn'` when the node predates the field (a node without it enforces
-	   *      the legacy marker, so that is the right answer, not a guess).
+	   *   3. On mainnet, `'rvn'` when the field is absent. Testnet requires
+	   *      the field or an explicit override.
 	   *
 	   * An RPC *failure* is a different case, and `params.assetMarkerPolicy`
 	   * decides it:
-	   *   - `'legacy-fallback'` (default in 1.x) resolves `'rvn'`, preserving the
-	   *     1.4.x behaviour;
-	   *   - `'strict'` propagates the failure. On a post-NIP-040 chain a build
+	   *   - `'legacy-fallback'` (mainnet default) resolves `'rvn'`;
+	   *   - `'strict'` (testnet default) propagates the failure. On a post-NIP-040 chain a build
 	   *     that guessed `'rvn'` produces a transaction the node rejects with
 	   *     `bad-txns-legacy-asset-marker-after-nip040`, so an online wallet
 	   *     should not treat "the node did not answer" as "the node said rvn".
@@ -8895,7 +8894,7 @@ function requireBaseAssetTransactionBuilder () {
 	  assetMarkerPolicy() {
 	    const policy = this.params.assetMarkerPolicy;
 	    if (policy === undefined || policy === null) {
-	      return 'legacy-fallback';
+	      return getNetworkConfig(this.network).baseNetwork === 'xna-test' ? 'strict' : 'legacy-fallback';
 	    }
 	    if (policy !== 'strict' && policy !== 'legacy-fallback') {
 	      throw new Error(
@@ -8933,7 +8932,9 @@ function requireBaseAssetTransactionBuilder () {
 	    }
 	    const marker = info ? info.asset_marker : undefined;
 	    if (marker === undefined || marker === null) {
-	      // A valid answer from a node that predates the field: legacy is correct.
+	      if (getNetworkConfig(this.network).baseNetwork === 'xna-test') {
+	        throw new Error('Testnet node did not report asset_marker; pass params.assetMarker for an offline build');
+	      }
 	      return 'rvn';
 	    }
 	    if (marker !== 'rvn' && marker !== 'xna') {
@@ -12633,14 +12634,11 @@ function requireNeuraiAssets () {
 	   * @param {string} config.toAddress - Default receiving address
 	   * @param {('rvn'|'xna')} [config.assetMarker] - NIP-040 marker for locally
 	   *   built raw transactions. Omit to use the node's
-	   *   getblockchaininfo.asset_marker (falls back to 'rvn' on nodes that do
-	   *   not report it). Per-operation params.assetMarker overrides this.
+	   *   getblockchaininfo.asset_marker. A missing field fails on testnet and
+	   *   falls back to 'rvn' on mainnet. Per-operation params.assetMarker overrides this.
 	   * @param {('strict'|'legacy-fallback')} [config.assetMarkerPolicy] - What to
-	   *   do when getblockchaininfo FAILS. 'legacy-fallback' (default in 1.x)
-	   *   resolves 'rvn'; 'strict' propagates the error instead, because on a
-	   *   post-NIP-040 chain a guessed 'rvn' builds a transaction the node
-	   *   rejects. A node that simply predates the field still resolves 'rvn'
-	   *   under both policies — that is an answer, not a failure.
+	   *   do when getblockchaininfo fails. Testnet defaults to 'strict'; mainnet
+	   *   defaults to 'legacy-fallback'. An absent field always fails on testnet.
 	   */
 	  constructor(rpc, config = {}) {
 	    if (!rpc || typeof rpc !== 'function') {

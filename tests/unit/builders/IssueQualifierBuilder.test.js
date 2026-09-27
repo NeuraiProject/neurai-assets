@@ -11,6 +11,8 @@ describe('IssueQualifierBuilder', () => {
 
     const rpc = async (method, params = []) => {
       switch (method) {
+        case 'getblockchaininfo':
+          return { chain: 'test', asset_marker: 'rvn' };
         case 'getassetdata':
           throw new Error('asset not found');
 
@@ -69,6 +71,8 @@ describe('IssueQualifierBuilder', () => {
 
     const rpc = async (method, params = []) => {
       switch (method) {
+        case 'getblockchaininfo':
+          return { chain: 'test', asset_marker: 'rvn' };
         case 'getassetdata':
           throw new Error('asset not found');
 

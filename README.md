@@ -37,6 +37,15 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 > (full name, owner `!` included: 31 mainnet / 121 testnet-regtest, validated
 > against a regtest node); peer `neurai-rpc ^0.6.0`.
 
+## 1.8.0: Reset testnet marker policy
+
+Testnet builders require the node's `getblockchaininfo.asset_marker` value
+(or an explicit override) and reject a missing marker instead of silently
+using `rvn` after the activation of `xna`. This release requires
+`@neuraiproject/neurai-rpc` `^0.7.0` as a peer and
+`@neuraiproject/neurai-create-transaction` `^0.9.2`. Development tests use
+`@neuraiproject/neurai-sign-transaction` `^3.0.3`.
+
 ## Features
 
 - ✅ **Non-custodial**: Library builds unsigned transactions, your wallet signs them
@@ -786,7 +795,7 @@ The library automatically validates that the owner token is returned in each ope
 
 Asset payloads open with a 3-byte marker that NIP-040 migrates from the
 Ravencoin-inherited `rvn` to `xna` at an activation height per network
-(testnet: 303000, already crossed; regtest: 1; mainnet: not scheduled yet).
+(reset testnet: 10; regtest: 1; mainnet: not scheduled yet).
 
 - Transactions built **through the node** (`createrawtransaction`) need
   nothing: the node stamps the marker itself.
@@ -797,10 +806,12 @@ Ravencoin-inherited `rvn` to `xna` at an activation height per network
      `'xna'` — offline builds or tests);
   2. otherwise the node's `getblockchaininfo.asset_marker` (node commit
      `347362b` or later);
-  3. `'rvn'` when the node predates that field — which matches what such a
-     node enforces.
+  3. On mainnet, `'rvn'` when the node predates that field. Testnet requires
+     the field or an explicit `assetMarker` override.
 
-No height tables and no network inference: the node (or you) decides.
+The node reports the marker for the next block. On the reset testnet it reports
+`rvn` with tip 8 and `xna` with tip 9. The builder does not infer a marker
+from the network name.
 
 ### Failure policy (`assetMarkerPolicy`, 1.5.0+)
 
@@ -811,16 +822,16 @@ not answer at all is a different situation, and `assetMarkerPolicy` decides it:
 const assets = new NeuraiAssets(rpc, {
   network: 'xna-test',
   addresses: [...],
-  assetMarkerPolicy: 'strict'   // default: 'legacy-fallback'
+  assetMarkerPolicy: 'strict'   // default on testnet
 });
 ```
 
 | Policy | `getblockchaininfo` fails | Field absent/null | Unknown value |
 | --- | --- | --- | --- |
-| `legacy-fallback` (default in 1.x) | resolves `'rvn'` | resolves `'rvn'` | throws |
-| `strict` | **throws** | resolves `'rvn'` | throws |
+| `legacy-fallback` (mainnet default) | resolves `'rvn'` | mainnet: `'rvn'`; testnet: throws | throws |
+| `strict` (testnet default) | **throws** | mainnet: `'rvn'`; testnet: throws | throws |
 
-Use `strict` in a connected wallet on a post-NIP-040 chain: guessing `'rvn'`
+The reset testnet defaults to `strict`. Guessing `'rvn'`
 there builds a transaction the node rejects with
 `bad-txns-legacy-asset-marker-after-nip040`, so "the node did not answer" must
 not silently become "the node said rvn". The rejection propagates out of the
@@ -893,8 +904,8 @@ Address types (every family is valid with the network label of its chain):
 
 The old `nq1p...` / `tnq1p...` encoding of generic AuthScript v1 is rejected, like
 in the node (same scriptPubKey: regenerate it as `nc1p...` / `tnc1p...`). The node
-only protects a witness family where it is active: today v1 on testnet and regtest,
-v2 / v3 only on regtest.
+only protects a witness family where it is active. All three families activate
+on the reset testnet from block 10 and on regtest from block 1.
 
 The library accepts these network names. A label only selects the chain: the
 address type always comes from the address itself.

@@ -24,6 +24,8 @@ function buildRpc({ assetName, assetUtxoSatoshis, includeOwner = true, ownerUtxo
 
   const rpc = async (method, params = []) => {
     switch (method) {
+      case 'getblockchaininfo':
+        return { chain: 'test', asset_marker: 'rvn' };
       case 'getaddressutxos': {
         const query = params[0] || {};
         if (query.assetName === ownerName) {

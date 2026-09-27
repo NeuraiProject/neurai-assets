@@ -11,6 +11,8 @@ describe('TagAddressBuilder', () => {
 
     const rpc = async (method, params = []) => {
       switch (method) {
+        case 'getblockchaininfo':
+          return { chain: 'test', asset_marker: 'rvn' };
         case 'getassetdata':
           return { amount: 10, units: 0, reissuable: 1 };
 

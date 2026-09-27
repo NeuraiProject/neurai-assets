@@ -13,6 +13,8 @@ describe('Build Result Metadata', () => {
 
     const rpc = async (method, params = []) => {
       switch (method) {
+        case 'getblockchaininfo':
+          return { chain: 'test', asset_marker: 'rvn' };
         case 'getassetdata':
           throw new Error('asset not found');
 
@@ -93,6 +95,8 @@ describe('Build Result Metadata', () => {
 
     const rpc = async (method, params = []) => {
       switch (method) {
+        case 'getblockchaininfo':
+          return { chain: 'test', asset_marker: 'rvn' };
         case 'getassetdata':
           throw new Error('asset not found');
 

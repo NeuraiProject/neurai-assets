@@ -11,8 +11,8 @@
  * @param {object} [options.assetMap] - getassetdata answers, by asset name
  * @param {Array} [options.xnaUtxos] - XNA UTXOs
  * @param {Array} [options.ownerUtxos] - Asset UTXOs (owner tokens, qualifiers, balances)
- * @param {'rvn'|'xna'} [options.assetMarker] - getblockchaininfo.asset_marker; omit to
- *   emulate a node that predates the field
+ * @param {'rvn'|'xna'} [options.assetMarker='rvn'] - getblockchaininfo.asset_marker
+ * @param {boolean} [options.omitAssetMarker=false] - Emulate a node that predates the field
  * @param {number} [options.feeRate] - estimatesmartfee answer in XNA/kB
  * @param {Error} [options.blockchainInfoError] - Make getblockchaininfo fail
  * @param {Array<string>} [options.calls] - Collects every method called
@@ -23,7 +23,8 @@ function createAssetRpc(options = {}) {
     assetMap = {},
     xnaUtxos = [],
     ownerUtxos = [],
-    assetMarker,
+    assetMarker = 'rvn',
+    omitAssetMarker = false,
     feeRate = 0.015,
     blockchainInfoError = null,
     calls
@@ -39,7 +40,7 @@ function createAssetRpc(options = {}) {
         if (blockchainInfoError) {
           throw blockchainInfoError;
         }
-        return assetMarker === undefined
+        return omitAssetMarker
           ? { chain: 'test' }
           : { chain: 'test', asset_marker: assetMarker };
       }

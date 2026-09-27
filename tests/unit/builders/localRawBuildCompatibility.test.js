@@ -65,13 +65,11 @@ function countScriptsContaining(outputs, fragment) {
   return outputs.filter(output => output.scriptHex.includes(fragment)).length;
 }
 
-function createRpc({ assetMap = {}, xnaUtxos = [], ownerUtxos = [], assetMarker }) {
+function createRpc({ assetMap = {}, xnaUtxos = [], ownerUtxos = [], assetMarker = 'rvn', omitAssetMarker = false }) {
   return async (method, params = []) => {
     switch (method) {
       case 'getblockchaininfo':
-        // With no marker configured, behave like a node that predates the
-        // asset_marker field (pre-347362b): the build must default to rvn.
-        return assetMarker === undefined ? { chain: 'test' } : { chain: 'test', asset_marker: assetMarker };
+        return omitAssetMarker ? { chain: 'test' } : { chain: 'test', asset_marker: assetMarker };
 
       case 'getassetdata': {
         const assetName = params[0];
@@ -276,7 +274,7 @@ describe('Local Raw Build NIP-040 marker', () => {
     expect(countScriptsContaining(outputs, '72766e')).to.equal(0);
   });
 
-  it('defaults to rvn when the node predates asset_marker', async () => {
+  it('uses rvn when the node reports it before activation', async () => {
     const result = await reissueFixture().build();
     expect(result.localRawBuild.params.assetMarker).to.equal('rvn');
     const outputs = parseUnsignedOutputs(createFromOperation(result.localRawBuild).rawTx);

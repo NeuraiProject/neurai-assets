@@ -47,19 +47,19 @@ describe('asset marker precedence', () => {
     expect(result.createTransactionBuild.params.assetMarker).to.equal('xna');
   });
 
-  it('resolves rvn when the node predates the field', async () => {
-    // assetMarker omitted entirely: getblockchaininfo answers without it.
-    const result = await assets(wallet()).reissueAsset(REISSUE);
-    expect(result.createTransactionBuild.params.assetMarker).to.equal('rvn');
+  it('rejects a testnet node that predates the field', async () => {
+    const failed = await assets(wallet({ omitAssetMarker: true })).reissueAsset(REISSUE)
+      .then(() => null, error => error);
+    expect(failed.message).to.match(/did not report asset_marker/);
   });
 
-  it('resolves rvn when the node reports null', async () => {
+  it('rejects a null marker from a testnet node', async () => {
     const rpc = async (method, params) => {
       if (method === 'getblockchaininfo') return { chain: 'test', asset_marker: null };
       return wallet()(method, params);
     };
-    const result = await assets(rpc).reissueAsset(REISSUE);
-    expect(result.createTransactionBuild.params.assetMarker).to.equal('rvn');
+    const failed = await assets(rpc).reissueAsset(REISSUE).then(() => null, error => error);
+    expect(failed.message).to.match(/did not report asset_marker/);
   });
 
   it('rejects an unknown value reported by the node, under both policies', async () => {
@@ -102,9 +102,10 @@ describe('assetMarkerPolicy on RPC failure', () => {
     expect(result.createTransactionBuild.params.assetMarker).to.equal('rvn');
   });
 
-  it('legacy-fallback is the default in 1.x', async () => {
-    const result = await assets(wallet(rpcFailure)).reissueAsset(REISSUE);
-    expect(result.createTransactionBuild.params.assetMarker).to.equal('rvn');
+  it('strict is the default on testnet', async () => {
+    const failed = await assets(wallet(rpcFailure)).reissueAsset(REISSUE)
+      .then(() => null, error => error);
+    expect(failed.message).to.match(/Cannot resolve the NIP-040 asset marker/);
   });
 
   it('strict propagates the failure out of build(), with no partial result', async () => {
@@ -121,10 +122,10 @@ describe('assetMarkerPolicy on RPC failure', () => {
     expect(failed.message).to.match(/connection refused/);
   });
 
-  it('strict still resolves rvn when the node simply lacks the field', async () => {
-    // Missing field is an answer from an older node, not a failure.
-    const result = await assets(wallet(), { assetMarkerPolicy: 'strict' }).reissueAsset(REISSUE);
-    expect(result.createTransactionBuild.params.assetMarker).to.equal('rvn');
+  it('strict rejects a testnet node that lacks the field', async () => {
+    const failed = await assets(wallet({ omitAssetMarker: true }), { assetMarkerPolicy: 'strict' })
+      .reissueAsset(REISSUE).then(() => null, error => error);
+    expect(failed.message).to.match(/did not report asset_marker/);
   });
 
   it('an operation-level policy overrides the config', async () => {

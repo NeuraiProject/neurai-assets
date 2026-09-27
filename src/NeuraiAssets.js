@@ -47,14 +47,11 @@ class NeuraiAssets {
    * @param {string} config.toAddress - Default receiving address
    * @param {('rvn'|'xna')} [config.assetMarker] - NIP-040 marker for locally
    *   built raw transactions. Omit to use the node's
-   *   getblockchaininfo.asset_marker (falls back to 'rvn' on nodes that do
-   *   not report it). Per-operation params.assetMarker overrides this.
+   *   getblockchaininfo.asset_marker. A missing field fails on testnet and
+   *   falls back to 'rvn' on mainnet. Per-operation params.assetMarker overrides this.
    * @param {('strict'|'legacy-fallback')} [config.assetMarkerPolicy] - What to
-   *   do when getblockchaininfo FAILS. 'legacy-fallback' (default in 1.x)
-   *   resolves 'rvn'; 'strict' propagates the error instead, because on a
-   *   post-NIP-040 chain a guessed 'rvn' builds a transaction the node
-   *   rejects. A node that simply predates the field still resolves 'rvn'
-   *   under both policies — that is an answer, not a failure.
+   *   do when getblockchaininfo fails. Testnet defaults to 'strict'; mainnet
+   *   defaults to 'legacy-fallback'. An absent field always fails on testnet.
    */
   constructor(rpc, config = {}) {
     if (!rpc || typeof rpc !== 'function') {
