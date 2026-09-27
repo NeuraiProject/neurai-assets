@@ -28,6 +28,7 @@ const {
   toProtocolInteger,
   sumProtocolIntegers
 } = require('../utils/assetAmount');
+const { prepareOutputsForRpc } = require('../utils/rpcAmount');
 
 /** Outputs below this are dust and are dropped instead of created. */
 const DUST_SATS = 1n;
@@ -348,10 +349,11 @@ class BaseAssetTransactionBuilder {
         vout: input.vout !== undefined ? input.vout : input.outputIndex
       }));
 
-      // Call createrawtransaction
+      // Call createrawtransaction. The node only accepts the asset quantities
+      // as JSON numbers; the caller's outputs keep the values as given.
       const rawTx = await this.rpc('createrawtransaction', [
         formattedInputs,
-        outputs
+        prepareOutputsForRpc(outputs)
       ]);
 
       return rawTx;
@@ -492,11 +494,15 @@ class BaseAssetTransactionBuilder {
    * 10^8 — e.g. reissuing 1 token of a units=0 asset minted 100,000,000).
    * The right answer is to send the value untouched.
    *
+   * A decimal string is also kept as it is: `buildRawTransaction` turns it
+   * into the JSON number the node requires (see utils/rpcAmount.js), and the
+   * outputs returned to the caller keep the string.
+   *
    * The `units` parameter is kept for API compatibility but is unused.
    *
-   * @param {number} amount - User-facing asset amount
+   * @param {number|string} amount - User-facing asset amount
    * @param {number} units - Asset decimal places (unused; kept for API)
-   * @returns {number} The user-facing amount, ready for the JSON output
+   * @returns {number|string} The user-facing amount, ready for the JSON output
    */
   toSatoshis(amount, units) {
     void units;

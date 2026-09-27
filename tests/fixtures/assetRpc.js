@@ -16,6 +16,7 @@
  * @param {number} [options.feeRate] - estimatesmartfee answer in XNA/kB
  * @param {Error} [options.blockchainInfoError] - Make getblockchaininfo fail
  * @param {Array<string>} [options.calls] - Collects every method called
+ * @param {Array<Array>} [options.rawTransactionParams] - Collects the params of every createrawtransaction call
  * @returns {Function} RPC function
  */
 function createAssetRpc(options = {}) {
@@ -27,7 +28,8 @@ function createAssetRpc(options = {}) {
     omitAssetMarker = false,
     feeRate = 0.015,
     blockchainInfoError = null,
-    calls
+    calls,
+    rawTransactionParams
   } = options;
 
   return async function rpc(method, params = []) {
@@ -68,6 +70,10 @@ function createAssetRpc(options = {}) {
         return { feerate: feeRate };
 
       case 'createrawtransaction':
+        if (rawTransactionParams) {
+          rawTransactionParams.push(params);
+        }
+        assertNodeNumericFields(params[1]);
         // The canonical path never uses this; the RPC path only needs a
         // placeholder, since these tests assert on the canonical bytes.
         return 'deadbeef';
@@ -79,6 +85,34 @@ function createAssetRpc(options = {}) {
         throw new Error(`Unexpected RPC method: ${method} (${JSON.stringify(params)})`);
     }
   };
+}
+
+/**
+ * The node reads these operation fields with `isNum()` (rpc/rawtransaction.cpp)
+ * and rejects anything else, a quoted decimal included. A value flagged
+ * `isLosslessNumber` counts as a number: neurai-rpc writes it as a bare token.
+ */
+const NODE_NUMERIC_FIELDS = ['asset_quantity', 'change_quantity'];
+
+function isJsonNumber(value) {
+  return typeof value === 'number' || (value !== null && typeof value === 'object' && value.isLosslessNumber === true);
+}
+
+function assertNodeNumericFields(outputs) {
+  const list = Array.isArray(outputs) ? outputs : [outputs];
+  for (const output of list) {
+    for (const payload of Object.values(output || {})) {
+      if (!payload || typeof payload !== 'object') continue;
+      for (const params of Object.values(payload)) {
+        if (!params || typeof params !== 'object') continue;
+        for (const field of NODE_NUMERIC_FIELDS) {
+          if (params[field] !== undefined && !isJsonNumber(params[field])) {
+            throw new Error(`Invalid parameter, missing asset data for key: ${field}`);
+          }
+        }
+      }
+    }
+  }
 }
 
 module.exports = { createAssetRpc };

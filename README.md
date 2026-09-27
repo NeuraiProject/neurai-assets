@@ -37,6 +37,19 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 > (full name, owner `!` included: 31 mainnet / 121 testnet-regtest, validated
 > against a regtest node); peer `neurai-rpc ^0.6.0`.
 
+## 1.8.1: Issue quantities given as decimal strings
+
+`createRootAsset`, `createSubAsset`, `createDepinAsset` and
+`createRestrictedAsset` failed with `Invalid parameter, missing asset data for
+key: asset_quantity` when `quantity` was a decimal string such as `"1000"`.
+The node reads `asset_quantity` and `change_quantity` only from JSON numbers,
+and the value reached `createrawtransaction` quoted. It is now converted on the
+copy sent to the node: a JavaScript number when that number writes back the
+same decimal, otherwise an exact decimal token written as a bare JSON number by
+`@neuraiproject/neurai-rpc` (same shape as its `rpcNumber()`). The outputs in
+the build result keep the value as it was given. Numeric quantities are
+unchanged.
+
 ## 1.8.0: Reset testnet marker policy
 
 Testnet builders require the node's `getblockchaininfo.asset_marker` value
@@ -87,6 +100,14 @@ display number is the only correct behavior; any extra factor on the wire
 either silently inflates the minted supply (`× 10⁸ → 100,000,000` tokens
 where the user asked for 1) or trips the daemon's
 `ParseFixedPoint` cap with `Invalid amount (3): …`.
+
+A quantity can be a number or a plain decimal string (`"1000.25"`). A string
+keeps every digit; it is sent to the node as a JSON number, which is the only
+form `createrawtransaction` accepts for `asset_quantity`. A decimal that no
+JavaScript number carries exactly is sent as an exact token, which requires
+the RPC function to serialize with `@neuraiproject/neurai-rpc` (its
+`getRPC()` does); any other serializer makes the node reject the call instead
+of changing the amount.
 
 This was regressed in `1.2.2`/`1.3.x` (a hardcoded `× 10⁸` was added to
 `BaseAssetTransactionBuilder.toSatoshis`) and fixed in the version after
