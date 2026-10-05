@@ -37,6 +37,13 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 > (full name, owner `!` included: 31 mainnet / 121 testnet-regtest, validated
 > against a regtest node); peer `neurai-rpc ^0.6.0`.
 
+## 1.8.3: Development dependencies
+
+Development only: tests run against sign-transaction `^3.1.0` (was `^3.0.3`),
+and `brace-expansion` 2.1.7 in the lockfile clears the `npm audit` advisories
+reported via mocha. The runtime code, its dependencies and the published API
+are the same as in 1.8.2.
+
 ## 1.8.2: Transfer amounts given as decimal strings
 
 `transferAsset` failed with `Invalid parameter, missing or invalid quantity`
