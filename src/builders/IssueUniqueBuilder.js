@@ -88,9 +88,9 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
       ipfsHashes = []
     } = this.params;
 
-    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-    // sitio de siempre, así que el orden de los errores no cambia.
+    // The owner token depends on nothing that follows, so asking for it
+    // alongside the asset reads saves a whole round trip. It is AWAITED where
+    // it always was, so the order errors surface in does not change.
     const ownerTokenName = AssetNameParser.getOwnerTokenName(rootName);
     const addresses = await this._getAddresses();
     const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -109,10 +109,10 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     }
 
     // 3. Check if any of the unique assets already exist.
-    // En fila, emitir diez únicos costaba diez idas y vueltas antes de
-    // empezar a construir. Ninguna depende de la anterior. El resultado se
-    // recorre en orden, así que el error sigue nombrando el primer nombre
-    // repetido de la lista, no el que el nodo conteste primero.
+    // In sequence, issuing ten uniques cost ten round trips before building
+    // could even start, and none of them depends on the previous one. The
+    // result is walked in order, so the error still names the first taken
+    // name in the list, not whichever the node answers first.
     const uniqueNames = assetTags.map(tag => `${rootName}#${tag}`);
     const uniqueExists = await Promise.all(
       uniqueNames.map(fullName => this.assetExists(fullName))
@@ -154,10 +154,10 @@ class IssueUniqueBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      // El token owner que la operación GASTA y devuelve viaja como
-      // transferencia (lleva importe), no con el payload 'owner', que sólo
-      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
-      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+      // The owner token an operation SPENDS and returns travels as a
+      // transfer (it carries an amount), not with the 'owner' payload, which
+      // only describes the token an issuance CREATES. Sizing it as 'owner'
+      // left the transaction 8 bytes below what the node charges.
       { address: changeAddress, assetName: ownerTokenName },
       ...assetTags.map(tag => ({
         address: toAddress,

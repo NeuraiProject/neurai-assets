@@ -68,11 +68,11 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
       ipfsHash = ''
     } = this.params;
 
-    // Un sub-DePIN ("&RAIZ/SENSOR") sigue siendo AssetType::DEPIN para el nodo
-    // —misma quema que la raíz— pero exige GASTAR y devolver el token owner del
-    // padre inmediato, igual que cualquier sub-asset (assets.cpp:731, :3784).
-    // Sin ese input el nodo rechaza con «Trying to create outpoint for asset
-    // that you don't have: &RAIZ!».
+    // A sub-DEPIN ("&ROOT/SENSOR") is still AssetType::DEPIN to the node —
+    // same burn as a root — but it requires SPENDING and returning the
+    // immediate parent's owner token, like any sub-asset (assets.cpp:731,
+    // :3784). Without that input the node rejects it with "Trying to create
+    // outpoint for asset that you don't have: &ROOT!".
     const parentAssetName = AssetNameParser.getParent(assetName);
     const parentOwnerTokenName = parentAssetName
       ? AssetNameParser.getOwnerTokenName(parentAssetName)
@@ -125,7 +125,7 @@ class IssueDepinBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      // La escolta del padre se devuelve como transferencia: lleva importe.
+      // The parent's escort is returned as a transfer: it carries an amount.
       ...(parentOwnerUTXO
         ? [{ address: changeAddress, assetName: parentOwnerTokenName }]
         : []),

@@ -28,12 +28,12 @@ class AssetNameParser {
       // QUALIFIER or SUB_QUALIFIER: #NAME or #ROOT/SUB
       if (cleanName.includes('/')) {
         type = AssetType.SUB_QUALIFIER;
-    // El padre es el INMEDIATO, no la raíz: el dueño de "A/B/C" es "A/B!".
-    // El nodo lo resuelve con find_last_of (assets.cpp GetParentName, misma
-    // rama para SUB y DEPIN). Partir por el primer '/' devolvía "A", así que
-    // toda emisión de tercer nivel buscaba el token owner equivocado y el nodo
-    // la rechazaba con «Trying to create outpoint for asset that you don't
-    // have».
+    // The parent is the IMMEDIATE one, not the root: "A/B/C" is owned by
+    // "A/B!". The node resolves it with find_last_of (assets.cpp
+    // GetParentName, same branch for SUB and DEPIN). Splitting on the first
+    // '/' returned "A", so every third-level issuance looked up the wrong
+    // owner token and the node rejected it with "Trying to create outpoint
+    // for asset that you don't have".
         const slash = cleanName.lastIndexOf('/');
         parent = cleanName.slice(0, slash);
         subName = cleanName.slice(slash + 1);

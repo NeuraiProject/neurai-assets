@@ -10,11 +10,11 @@
  * - Cost: No burn (but requires fee)
  * - Requires the asset's owner token ($ASSET! or &ASSET!)
  *
- * Un DePIN se congela con la MISMA transacción que un restringido: escolta del
- * token owner más una salida de datos nulos con (nombre, flag). Es literalmente
- * lo que construye el nodo en UpdateDEPINAddressRestriction (rpc/assets.cpp:70),
- * así que comparte builder en vez de tener uno paralelo que acabaría
- * divergiendo.
+ * A DEPIN asset is frozen with the SAME transaction as a restricted one: the
+ * owner-token escort plus one null-asset-data output carrying (name, flag).
+ * That is literally what the node builds in UpdateDEPINAddressRestriction
+ * (rpc/assets.cpp:70), so it shares this builder instead of having a parallel
+ * one that would eventually drift.
  * - Owner token must be returned
  */
 
@@ -35,9 +35,9 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
       throw new Error('assetName is required');
     }
 
-    // Restringido o DePIN: son los dos tipos que el nodo admite aquí
-    // (assets.cpp:4496 acepta QUALIFIER, SUB_QUALIFIER, RESTRICTED y DEPIN;
-    // los qualifiers usan tag/untag, no esta operación).
+    // Restricted or DEPIN: the two types the node accepts here
+    // (assets.cpp:4496 allows QUALIFIER, SUB_QUALIFIER, RESTRICTED and DEPIN;
+    // qualifiers use tag/untag, not this operation).
     this.validateAssetName(
       params.assetName,
       AssetNameParser.isDepin(params.assetName) ? 'DEPIN' : 'RESTRICTED'
@@ -77,9 +77,9 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     const { assetName } = this.params;
     const isDepin = AssetNameParser.isDepin(assetName);
 
-    // La congelación global es de assets restringidos: el nodo la expone como
-    // checkglobalrestriction y no tiene equivalente DePIN. Un DePIN se
-    // gestiona dispositivo a dispositivo.
+    // Global freeze belongs to restricted assets: the node exposes it as
+    // checkglobalrestriction and there is no DEPIN equivalent. A DEPIN asset
+    // is managed holder by holder.
     if (isDepin && (operationType === 'FREEZE_ASSET' || operationType === 'UNFREEZE_ASSET')) {
       throw new Error(
         `Global freeze does not apply to DEPIN assets (${assetName}). ` +
@@ -87,9 +87,9 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
       );
     }
 
-    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-    // sitio de siempre, así que el orden de los errores no cambia.
+    // The owner token depends on nothing that follows, so asking for it
+    // alongside the asset reads saves a whole round trip. It is AWAITED where
+    // it always was, so the order errors surface in does not change.
     const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
     const addresses = await this._getAddresses();
     const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -124,10 +124,10 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
       throw error;
     }
 
-    // La dirección que sostiene el token owner no puede congelarse ni
-    // revocarse: el nodo lo rechaza (rpc/assets.cpp:106) y, si se colara,
-    // dejaría el asset sin nadie que pudiera descongelarlo. Se comprueba aquí
-    // para dar el motivo en vez de un error de consenso.
+    // The address holding the owner token cannot be frozen or revoked: the
+    // node rejects it (rpc/assets.cpp:106) and, if it slipped through, it
+    // would leave the asset with nobody able to unfreeze it. Checked here so
+    // the reason is stated instead of surfacing as a consensus error.
     const targets = this.params.addresses || [];
     if (targets.includes(ownerTokenUTXO.address)) {
       throw new Error(
@@ -141,15 +141,15 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
 
     // 6. Estimate fee
     // Outputs: XNA change + freeze/unfreeze operation (sent to changeAddress)
-    // Las salidas de asset deben describirse como lo que el nodo serializa.
-    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
-    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
-    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+    // Asset outputs must be described as what the node serializes. As bare
+    // addresses they counted 34 bytes each and the whole payload went unpaid;
+    // the null-data ones (tag, freeze, verifier) carry no destination at all:
+    // their script REPLACES the P2PKH.
     const isGlobal = operationType === 'FREEZE_ASSET' || operationType === 'UNFREEZE_ASSET';
     const frozenAddresses = isGlobal ? [] : (this.params.addresses || []);
     const outputAddresses = [
       changeAddress,
-      // El token owner se gasta y se devuelve: transferencia.
+      // The owner token is spent and returned: a transfer.
       { address: changeAddress, assetName: ownerTokenName },
       ...(isGlobal
         ? [{ assetName, kind: 'globalRestriction' }]
@@ -255,12 +255,12 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
 
     // 14. Create raw transaction.
     //
-    // Para un DePIN el `createrawtransaction` del nodo no sirve: su objeto
-    // freeze_addresses exige un nombre restringido y responde «a valid
-    // restricted asset name must be provided». Es un límite de esa interfaz
-    // RPC, no de la operación —el nodo acepta la transacción perfectamente—,
-    // así que el hex sale del códec local, igual que ya hacen las reemisiones
-    // desde 1.5.0. Para restringidos se conserva la ruta de siempre.
+    // For a DEPIN asset the node's `createrawtransaction` is no use: its
+    // freeze_addresses object demands a restricted name and answers "a valid
+    // restricted asset name must be provided". That is a limit of that RPC
+    // interface, not of the operation — the node accepts the transaction
+    // perfectly well — so the hex comes from the local codec, as reissues
+    // already do since 1.5.0. Restricted assets keep the usual path.
     const rawTx = isDepin
       ? this.buildRawTransactionLocally(createTransactionBuild)
       : await this.buildRawTransaction(inputs, orderedOutputs);

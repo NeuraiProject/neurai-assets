@@ -75,9 +75,9 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
       throw new Error('Cannot parse parent asset from SUB asset name');
     }
 
-    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-    // sitio de siempre, así que el orden de los errores no cambia.
+    // The owner token depends on nothing that follows, so asking for it
+    // alongside the asset reads saves a whole round trip. It is AWAITED where
+    // it always was, so the order errors surface in does not change.
     const ownerTokenName = AssetNameParser.getOwnerTokenName(parentAssetName);
     const addresses = await this._getAddresses();
     const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -86,9 +86,9 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
     );
     ownerTokenLookup.catch(() => {});
 
-    // 3-4. Existencia del padre y del sub: independientes entre sí, así que
-    // se preguntan a la vez. Se comprueban en el mismo orden de antes, luego
-    // «no existe el padre» sigue ganando a «el sub ya existe».
+    // 3-4. Parent and sub existence are independent of each other, so both
+    // are asked at once. They are checked in the same order as before, so
+    // "parent does not exist" still wins over "the sub already exists".
     const [parentExists, subExists] = await Promise.all([
       this.assetExists(parentAssetName),
       this.assetExists(assetName)
@@ -135,10 +135,10 @@ class IssueSubBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      // El token owner que la operación GASTA y devuelve viaja como
-      // transferencia (lleva importe), no con el payload 'owner', que sólo
-      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
-      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+      // The owner token an operation SPENDS and returns travels as a
+      // transfer (it carries an amount), not with the 'owner' payload, which
+      // only describes the token an issuance CREATES. Sizing it as 'owner'
+      // left the transaction 8 bytes below what the node charges.
       { address: changeAddress, assetName: ownerTokenName },
       { address: toAddress, assetName, kind: 'issue', hasIpfs },
       { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },

@@ -240,11 +240,11 @@ describe('AssetNameParser', () => {
 });
 
 describe('parent resolution — immediate, not root (1.6.0)', () => {
-  // El nodo resuelve el padre con find_last_of (assets.cpp GetParentName,
-  // misma rama para SUB y DEPIN). Partir por el primer '/' devolvía la raíz,
-  // así que toda emisión de tercer nivel buscaba el token owner equivocado y
-  // el nodo la rechazaba con «Trying to create outpoint for asset that you
-  // don't have».
+  // The node resolves the parent with find_last_of (assets.cpp
+  // GetParentName, same branch for SUB and DEPIN). Splitting on the first '/'
+  // returned the root, so every third-level issuance looked up the wrong
+  // owner token and the node rejected it with "Trying to create outpoint for
+  // asset that you don't have".
   it('resolves A/B/C to A/B, not A', () => {
     expect(AssetNameParser.getParent('A/B/C')).to.equal('A/B');
     expect(AssetNameParser.parse('A/B/C').subName).to.equal('C');

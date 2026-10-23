@@ -391,14 +391,14 @@ class AssetQueries {
   /**
    * List DEPIN addresses that have revealed a public key on chain.
    *
-   * Sólo quien ha revelado su clave pública puede participar en la mensajería
-   * DePIN, así que esta lista es un subconjunto de `listDepinHolders` y no
-   * sustituye a aquella: no dice nada sobre validez ni cantidades.
+   * Only an address that has revealed its public key can take part in DEPIN
+   * messaging, so this list is a subset of `listDepinHolders` and does not
+   * replace it: it says nothing about validity or amounts.
    *
    * @param {string} assetName - DEPIN asset name
-   * @param {number} [count] - Máximo de resultados (el nodo topa en 50000)
-   * @param {number} [start] - Desplazamiento
-   * @returns {Promise<Array<{address: string, pubkey: string}>>} Direcciones
+   * @param {number} [count] - Maximum results (the node caps at 50000)
+   * @param {number} [start] - Offset
+   * @returns {Promise<Array<{address: string, pubkey: string}>>} Addresses
    */
   async listDepinAddresses(assetName, count, start) {
     if (!assetName) {
@@ -420,8 +420,8 @@ class AssetQueries {
         );
       }
       const message = rpcErrorMessage(error);
-      // El nodo necesita un índice aparte para esto y su aviso es fácil de
-      // perder dentro de un «Failed to…» genérico: se conserva entero.
+      // The node needs a separate index for this, and its warning is easy to
+      // lose inside a generic "Failed to…": it is kept whole.
       if (message.includes('pubkeyindex')) {
         throw new Error(
           `listdepinaddresses needs the node running with -pubkeyindex (and a reindex). ` +

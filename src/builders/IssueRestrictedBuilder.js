@@ -78,9 +78,9 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
       ipfsHash = ''
     } = this.params;
 
-    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-    // sitio de siempre, así que el orden de los errores no cambia.
+    // The owner token depends on nothing that follows, so asking for it
+    // alongside the asset reads saves a whole round trip. It is AWAITED where
+    // it always was, so the order errors surface in does not change.
     const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
     const addresses = await this._getAddresses();
     const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -123,10 +123,10 @@ class IssueRestrictedBuilder extends BaseAssetTransactionBuilder {
     }
 
     // 7. Estimate fee (+1 for owner token input)
-    // Las salidas de asset deben describirse como lo que el nodo serializa.
-    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
-    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
-    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+    // Asset outputs must be described as what the node serializes. As bare
+    // addresses they counted 34 bytes each and the whole payload went unpaid;
+    // the null-data ones (tag, freeze, verifier) carry no destination at all:
+    // their script REPLACES the P2PKH.
     const outputAddresses = [
       burnInfo.address,
       changeAddress,

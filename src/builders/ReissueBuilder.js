@@ -65,11 +65,11 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
       newIpfs
     } = this.params;
 
-    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-    // los datos del asset ahorra una ida y vuelta completa. Se ESPERA en su
-    // sitio de siempre (paso 6), así que el orden de los errores no cambia:
-    // «el asset no existe» y «no es reemitible» se siguen lanzando antes que
-    // «no tienes el token owner».
+    // The owner token depends on nothing that follows, so asking for it
+    // alongside the asset data saves a whole round trip. It is AWAITED where
+    // it always was (step 6), so the order errors surface in does not change:
+    // "asset does not exist" and "not reissuable" still throw before "you do
+    // not own the owner token".
     const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
     const addresses = await this._getAddresses();
     const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -141,10 +141,10 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
     const outputAddresses = [
       burnInfo.address,
       changeAddress,
-      // El token owner que la operación GASTA y devuelve viaja como
-      // transferencia (lleva importe), no con el payload 'owner', que sólo
-      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
-      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+      // The owner token an operation SPENDS and returns travels as a
+      // transfer (it carries an amount), not with the 'owner' payload, which
+      // only describes the token an issuance CREATES. Sizing it as 'owner'
+      // left the transaction 8 bytes below what the node charges.
       { address: changeAddress, assetName: ownerTokenName },
       { address: toAddress, assetName, kind: 'reissue', hasIpfs: Boolean(newIpfs) },
     ];
