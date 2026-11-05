@@ -37,6 +37,30 @@ Complete asset management library for Neurai blockchain. Supports creation, reis
 > (full name, owner `!` included: 31 mainnet / 121 testnet-regtest, validated
 > against a regtest node); peer `neurai-rpc ^0.6.0`.
 
+## 1.8.4: exact amounts with lossless-json 4.3.2, neurai-rpc 0.9
+
+An issue quantity, a reissue quantity or a transfer amount that no
+JavaScript number carries exactly (for example `"9876543210.12345678"`) is
+sent as an exact JSON number since 1.8.1. With lossless-json 4.3.2 or later,
+which a fresh install of neurai-rpc resolves, it reached the node as an object
+(`{"isLosslessNumber":true,"value":"…"}`) and the node rejected the
+transaction ("missing asset data for key: asset_quantity"): those versions
+recognise a LosslessNumber by the registered symbol
+`lossless-json.LosslessNumber`, not by the `isLosslessNumber` property. The
+exact amount now carries both, so it is written as a number with every
+lossless-json 4. Amounts that a JavaScript number carries were not affected.
+
+The peer dependency accepts `@neuraiproject/neurai-rpc` 0.7, 0.8 and 0.9 (was
+`^0.7.0` only), so a wallet that installs neurai-rpc 0.9.1, the release with
+the genesis of the testnet reset of 2026-11-05, no longer fails with a peer
+conflict. The library does not import neurai-rpc: it calls the `rpc` function
+it is given, and the call shape is the same in those versions.
+
+Requires create-transaction `^0.10.0` (was `^0.9.2`); the bundles carry it.
+create-transaction 0.10.0 follows the node's NIP-014 encoding for version 3
+transactions. The asset builders create version 2 transactions, so the bytes
+they produce do not change.
+
 ## 1.8.3: Development dependencies
 
 Development only: tests run against sign-transaction `^3.1.0` (was `^3.0.3`),

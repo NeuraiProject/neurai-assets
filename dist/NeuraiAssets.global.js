@@ -766,14 +766,14 @@ var NeuraiAssetsBundle = (function (exports) {
 		  /**
 		   * List DEPIN addresses that have revealed a public key on chain.
 		   *
-		   * Sólo quien ha revelado su clave pública puede participar en la mensajería
-		   * DePIN, así que esta lista es un subconjunto de `listDepinHolders` y no
-		   * sustituye a aquella: no dice nada sobre validez ni cantidades.
+		   * Only an address that has revealed its public key can take part in DEPIN
+		   * messaging, so this list is a subset of `listDepinHolders` and does not
+		   * replace it: it says nothing about validity or amounts.
 		   *
 		   * @param {string} assetName - DEPIN asset name
-		   * @param {number} [count] - Máximo de resultados (el nodo topa en 50000)
-		   * @param {number} [start] - Desplazamiento
-		   * @returns {Promise<Array<{address: string, pubkey: string}>>} Direcciones
+		   * @param {number} [count] - Maximum results (the node caps at 50000)
+		   * @param {number} [start] - Offset
+		   * @returns {Promise<Array<{address: string, pubkey: string}>>} Addresses
 		   */
 		  async listDepinAddresses(assetName, count, start) {
 		    if (!assetName) {
@@ -795,8 +795,8 @@ var NeuraiAssetsBundle = (function (exports) {
 		        );
 		      }
 		      const message = rpcErrorMessage(error);
-		      // El nodo necesita un índice aparte para esto y su aviso es fácil de
-		      // perder dentro de un «Failed to…» genérico: se conserva entero.
+		      // The node needs a separate index for this, and its warning is easy to
+		      // lose inside a generic "Failed to…": it is kept whole.
 		      if (message.includes('pubkeyindex')) {
 		        throw new Error(
 		          `listdepinaddresses needs the node running with -pubkeyindex (and a reindex). ` +
@@ -3162,6 +3162,20 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return (word << (32 - shift)) | (word >>> shift);
 		}
 		/**
+		 * Rotate-left operation for uint32 values.
+		 * @param word - source word
+		 * @param shift - shift amount in bits
+		 * @returns Rotated word.
+		 * @example
+		 * Rotate a 32-bit word to the left.
+		 * ```ts
+		 * rotl(0x12345678, 8);
+		 * ```
+		 */
+		function rotl(word, shift) {
+		    return (word << shift) | ((word >>> (32 - shift)) >>> 0);
+		}
+		/**
 		 * Creates a callable hash function from a stateful class constructor.
 		 * @param hashCons - hash constructor or factory
 		 * @param info - optional metadata such as DER OID
@@ -3656,12 +3670,19 @@ var NeuraiAssetsBundle = (function (exports) {
 		        for (let i = 0; i < voutCount; i += 1)
 		            outputs.push(readOutput(reader));
 		    }
-		    // NIP-014: vrefin sits between vout and witness, v3 only (even when empty).
+		    // NIP-014: reference inputs sit between vout and witness, announced by flag
+		    // 0x02. Without the flag a version 3 transaction reads as 1.0.7 reads it.
 		    const vrefin = [];
-		    if (version === 3) {
+		    const hasRefInputs = (flags & 2) !== 0;
+		    if (hasRefInputs) {
+		        flags ^= 2;
 		        const refCount = reader.readCount(36, 'refinput');
 		        for (let i = 0; i < refCount; i += 1)
 		            vrefin.push(readOutpoint(reader));
+		        if (vrefin.length === 0) {
+		            // One encoding per transaction: the flag means some.
+		            throw new Error('Superfluous reference inputs record (flag 0x02 with no reference inputs)');
+		        }
 		    }
 		    if (flags & 1) {
 		        flags ^= 1;
@@ -3673,6 +3694,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		                stack.push(bytesToHex(reader.readBytes(elementLength)));
 		            }
 		            input.witness = stack;
+		        }
+		        if (hasRefInputs && !inputs.some(inputHasWitness)) {
+		            // With reference inputs the witness flag means some witness; 1.0.7 reads
+		            // an empty witness record without them, and so does the node.
+		            throw new Error('Superfluous witness record (flag 0x01 with no witness data)');
 		        }
 		    }
 		    if (flags) {
@@ -3711,10 +3737,13 @@ var NeuraiAssetsBundle = (function (exports) {
 		        throw new Error(`vrefin requires transaction version 3 (got version ${tx.version})`);
 		    }
 		    const withWitness = (options.includeWitness ?? true) && tx.inputs.some(inputHasWitness);
+		    // NIP-014: reference inputs keep the extended format without witnesses too,
+		    // because the txid commits to them.
+		    const flags = (withWitness ? 1 : 0) | (vrefin.length > 0 ? 2 : 0);
 		    const parts = [u32LE(tx.version >>> 0)];
-		    if (withWitness) {
+		    if (flags) {
 		        // Extended format: dummy empty vin + flags byte.
-		        parts.push(Uint8Array.of(0x00, 0x01));
+		        parts.push(Uint8Array.of(0x00, flags));
 		    }
 		    parts.push(compactSize(tx.inputs.length));
 		    for (const input of tx.inputs)
@@ -3722,7 +3751,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    parts.push(compactSize(tx.outputs.length));
 		    for (const output of tx.outputs)
 		        parts.push(serializeCodecOutput(output));
-		    if (tx.version === 3) {
+		    if (flags & 2) {
 		        parts.push(compactSize(vrefin.length));
 		        for (const ref of vrefin)
 		            parts.push(serializeOutpoint(ref));
@@ -3761,6 +3790,880 @@ var NeuraiAssetsBundle = (function (exports) {
 		    return { size, strippedSize, weight, vsize: Math.ceil(weight / 4) };
 		}
 
+		/**
+
+		SHA1 (RFC 3174), MD5 (RFC 1321), and RIPEMD160 legacy, weak hash functions.
+		RFC 2286 only covers HMAC-RIPEMD160 wrapper material and test vectors,
+		not the base RIPEMD-160 compression spec.
+		Don't use them in a new protocol. What "weak" means:
+
+		- Collisions can be made with 2^18 effort in MD5, 2^60 in SHA1, 2^80 in RIPEMD160.
+		- No practical pre-image attacks (only theoretical, 2^123.4)
+		- HMAC seems kinda ok: https://www.rfc-editor.org/rfc/rfc6151
+		 * @module
+		 */
+		// RIPEMD-160
+		// Permutation repeatedly applied to derive the later RIPEMD-160 message-order tables.
+		const Rho160 = /* @__PURE__ */ Uint8Array.from([
+		    7, 4, 13, 1, 10, 6, 15, 3, 12, 0, 9, 5, 2, 14, 11, 8,
+		]);
+		const Id160 = /* @__PURE__ */ (() => Uint8Array.from(new Array(16).fill(0).map((_, i) => i)))();
+		const Pi160 = /* @__PURE__ */ (() => Id160.map((i) => (9 * i + 5) % 16))();
+		// Five left/right message-word orderings for the RIPEMD-160 dual-lane rounds.
+		const idxLR = /* @__PURE__ */ (() => {
+		    const L = [Id160];
+		    const R = [Pi160];
+		    const res = [L, R];
+		    for (let i = 0; i < 4; i++)
+		        for (let j of res)
+		            j.push(j[i].map((k) => Rho160[k]));
+		    return res;
+		})();
+		const idxL = /* @__PURE__ */ (() => idxLR[0])();
+		const idxR = /* @__PURE__ */ (() => idxLR[1])();
+		// const [idxL, idxR] = idxLR;
+		// Base per-group shift table before the left/right message-order permutations are applied.
+		const shifts160 = /* @__PURE__ */ [
+		    [11, 14, 15, 12, 5, 8, 7, 9, 11, 13, 14, 15, 6, 7, 9, 8],
+		    [12, 13, 11, 15, 6, 9, 9, 7, 12, 15, 11, 13, 7, 8, 7, 7],
+		    [13, 15, 14, 11, 7, 7, 6, 8, 13, 14, 13, 12, 5, 5, 6, 9],
+		    [14, 11, 12, 14, 8, 6, 5, 5, 15, 12, 15, 14, 9, 9, 8, 6],
+		    [15, 12, 13, 13, 9, 5, 8, 6, 14, 11, 12, 11, 8, 6, 5, 5],
+		].map((i) => Uint8Array.from(i));
+		const shiftsL160 = /* @__PURE__ */ idxL.map((idx, i) => idx.map((j) => shifts160[i][j]));
+		const shiftsR160 = /* @__PURE__ */ idxR.map((idx, i) => idx.map((j) => shifts160[i][j]));
+		// Five left-lane additive constants for RIPEMD-160.
+		const Kl160 = /* @__PURE__ */ Uint32Array.from([
+		    0x00000000, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e,
+		]);
+		// Five right-lane additive constants for RIPEMD-160.
+		const Kr160 = /* @__PURE__ */ Uint32Array.from([
+		    0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0x00000000,
+		]);
+		// Called `f()` in the spec; valid `group` values are 0..4, and out-of-range
+		// inputs currently fall through to the group-4 branch.
+		function ripemd_f(group, x, y, z) {
+		    if (group === 0)
+		        return x ^ y ^ z;
+		    if (group === 1)
+		        return (x & y) | (~x & z);
+		    if (group === 2)
+		        return (x | ~y) ^ z;
+		    if (group === 3)
+		        return (x & z) | (y & ~z);
+		    return x ^ (y | ~z);
+		}
+		// Reusable 16-word RIPEMD-160 message block buffer.
+		const BUF_160 = /* @__PURE__ */ new Uint32Array(16);
+		/**
+		 * Internal RIPEMD-160 legacy hash class.
+		 * RFC 2286 only adds HMAC-RIPEMD160 material, not the core hash specification.
+		 */
+		class _RIPEMD160 extends HashMD {
+		    h0 = 0x67452301 | 0;
+		    h1 = 0xefcdab89 | 0;
+		    h2 = 0x98badcfe | 0;
+		    h3 = 0x10325476 | 0;
+		    h4 = 0xc3d2e1f0 | 0;
+		    constructor() {
+		        super(64, 20, 8, true);
+		    }
+		    get() {
+		        const { h0, h1, h2, h3, h4 } = this;
+		        return [h0, h1, h2, h3, h4];
+		    }
+		    set(h0, h1, h2, h3, h4) {
+		        this.h0 = h0 | 0;
+		        this.h1 = h1 | 0;
+		        this.h2 = h2 | 0;
+		        this.h3 = h3 | 0;
+		        this.h4 = h4 | 0;
+		    }
+		    process(view, offset) {
+		        for (let i = 0; i < 16; i++, offset += 4)
+		            BUF_160[i] = view.getUint32(offset, true);
+		        // prettier-ignore
+		        let al = this.h0 | 0, ar = al, bl = this.h1 | 0, br = bl, cl = this.h2 | 0, cr = cl, dl = this.h3 | 0, dr = dl, el = this.h4 | 0, er = el;
+		        // Instead of iterating 0 to 80, we split it into 5 groups
+		        // And use the groups in constants, functions, etc. Much simpler
+		        for (let group = 0; group < 5; group++) {
+		            const rGroup = 4 - group;
+		            const hbl = Kl160[group], hbr = Kr160[group]; // prettier-ignore
+		            const rl = idxL[group], rr = idxR[group]; // prettier-ignore
+		            const sl = shiftsL160[group], sr = shiftsR160[group]; // prettier-ignore
+		            for (let i = 0; i < 16; i++) {
+		                const tl = (rotl(al + ripemd_f(group, bl, cl, dl) + BUF_160[rl[i]] + hbl, sl[i]) + el) | 0;
+		                al = el, el = dl, dl = rotl(cl, 10) | 0, cl = bl, bl = tl; // prettier-ignore
+		            }
+		            // 2 loops are 10% faster
+		            for (let i = 0; i < 16; i++) {
+		                const tr = (rotl(ar + ripemd_f(rGroup, br, cr, dr) + BUF_160[rr[i]] + hbr, sr[i]) + er) | 0;
+		                ar = er, er = dr, dr = rotl(cr, 10) | 0, cr = br, br = tr; // prettier-ignore
+		            }
+		        }
+		        // Add the compressed chunk to the current hash value
+		        // Final recombination cross-adds the left/right lane accumulators into the next h0..h4 order.
+		        this.set((this.h1 + cl + dr) | 0, (this.h2 + dl + er) | 0, (this.h3 + el + ar) | 0, (this.h4 + al + br) | 0, (this.h0 + bl + cr) | 0);
+		    }
+		    roundClean() {
+		        clean(BUF_160);
+		    }
+		    destroy() {
+		        this.destroyed = true;
+		        clean(this.buffer);
+		        this.set(0, 0, 0, 0, 0);
+		    }
+		}
+		/**
+		 * RIPEMD-160 - a legacy hash function from 1990s.
+		 * RFC 2286 only covers HMAC-RIPEMD160 test material; the links below point
+		 * at the base RIPEMD-160 references.
+		 * * {@link https://homes.esat.kuleuven.be/~bosselae/ripemd160.html}
+		 * * {@link https://homes.esat.kuleuven.be/~bosselae/ripemd160/pdf/AB-9601/AB-9601.pdf}
+		 * @param msg - message bytes to hash
+		 * @returns Digest bytes.
+		 * @example
+		 * Hash a message with RIPEMD-160.
+		 * ```ts
+		 * ripemd160(new Uint8Array([97, 98, 99]));
+		 * ```
+		 */
+		const ripemd160 = /* @__PURE__ */ createHasher(() => new _RIPEMD160());
+
+		const PSBT_MAGIC = Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff);
+		const PSBT_GLOBAL_UNSIGNED_TX = 0x00;
+		const PSBT_GLOBAL_VERSION = 0xfb;
+		const PSBT_IN_NON_WITNESS_UTXO = 0x00;
+		const PSBT_IN_WITNESS_UTXO = 0x01;
+		const PSBT_IN_PARTIAL_SIG = 0x02;
+		const PSBT_IN_SIGHASH_TYPE = 0x03;
+		const PSBT_IN_REDEEM_SCRIPT = 0x04;
+		const PSBT_IN_WITNESS_SCRIPT = 0x05;
+		const PSBT_IN_BIP32_DERIVATION = 0x06;
+		const PSBT_IN_FINAL_SCRIPTSIG = 0x07;
+		const PSBT_IN_FINAL_SCRIPTWITNESS = 0x08;
+		const PSBT_OUT_REDEEM_SCRIPT = 0x00;
+		const PSBT_OUT_WITNESS_SCRIPT = 0x01;
+		const PSBT_OUT_BIP32_DERIVATION = 0x02;
+		const INPUT_FIELD_NAMES = {
+		    [PSBT_IN_NON_WITNESS_UTXO]: 'previous transaction',
+		    [PSBT_IN_WITNESS_UTXO]: 'witness UTXO',
+		    [PSBT_IN_PARTIAL_SIG]: 'partial signature',
+		    [PSBT_IN_SIGHASH_TYPE]: 'sighash type',
+		    [PSBT_IN_REDEEM_SCRIPT]: 'redeem script',
+		    [PSBT_IN_WITNESS_SCRIPT]: 'witness script',
+		    [PSBT_IN_BIP32_DERIVATION]: 'BIP32 derivation',
+		    [PSBT_IN_FINAL_SCRIPTSIG]: 'final scriptSig',
+		    [PSBT_IN_FINAL_SCRIPTWITNESS]: 'final script witness'
+		};
+		const OUTPUT_FIELD_NAMES = {
+		    [PSBT_OUT_REDEEM_SCRIPT]: 'redeem script',
+		    [PSBT_OUT_WITNESS_SCRIPT]: 'witness script',
+		    [PSBT_OUT_BIP32_DERIVATION]: 'BIP32 derivation'
+		};
+		// A Finalizer clears the signing data it knows about (BIP-174) and keeps the
+		// UTXO, the final scripts and the fields it does not interpret.
+		const CLEARED_ON_FINALIZE = new Set([
+		    PSBT_IN_PARTIAL_SIG,
+		    PSBT_IN_SIGHASH_TYPE,
+		    PSBT_IN_REDEEM_SCRIPT,
+		    PSBT_IN_WITNESS_SCRIPT,
+		    PSBT_IN_BIP32_DERIVATION
+		]);
+		const UPDATE_FIELDS = new Set([
+		    'previousTx',
+		    'witnessUtxo',
+		    'witnessScript',
+		    'sighashType',
+		    'bip32Derivation',
+		    'partialSig',
+		    'finalScriptSig',
+		    'finalScriptWitness'
+		]);
+		// Strict ECDSA (AuthScript witness v3): witness [authType 0x02, sig, pubkey, OP_TRUE]
+		// against taggedHash("NeuraiAuthScript", 0x03 || 0x02 || HASH160(pubkey) || SHA256(OP_TRUE)).
+		const AUTHSCRIPT_TAG = 'NeuraiAuthScript';
+		const ECDSA_WITNESS_VERSION = 0x03;
+		const ECDSA_AUTH_TYPE = 0x02;
+		const OP_TRUE_SCRIPT = Uint8Array.of(0x51);
+		const HARDENED = 0x80000000;
+		// ---------------------------------------------------------------------------
+		// Bytes
+		const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+		function bytesToBase64(bytes) {
+		    let out = '';
+		    for (let i = 0; i < bytes.length; i += 3) {
+		        const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+		        out += BASE64[(n >> 18) & 63] + BASE64[(n >> 12) & 63];
+		        out += i + 1 < bytes.length ? BASE64[(n >> 6) & 63] : '=';
+		        out += i + 2 < bytes.length ? BASE64[n & 63] : '=';
+		    }
+		    return out;
+		}
+		function base64ToBytes(text) {
+		    if (text.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) {
+		        throw new Error('PSBT string is neither base64 nor hex');
+		    }
+		    const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
+		    const out = new Uint8Array((text.length / 4) * 3 - padding);
+		    const digit = (char) => (char === '=' ? 0 : BASE64.indexOf(char));
+		    let o = 0;
+		    for (let i = 0; i < text.length; i += 4) {
+		        const n = (digit(text[i]) << 18) | (digit(text[i + 1]) << 12) | (digit(text[i + 2]) << 6) | digit(text[i + 3]);
+		        for (const shift of [16, 8, 0])
+		            if (o < out.length)
+		                out[o++] = (n >> shift) & 255;
+		    }
+		    return out;
+		}
+		function psbtBytes(psbt) {
+		    if (psbt instanceof Uint8Array)
+		        return psbt;
+		    if (typeof psbt !== 'string')
+		        throw new TypeError('PSBT must be a base64 or hex string, or bytes');
+		    const text = psbt.trim();
+		    return /^70736274ff/i.test(text) ? hexToBytes(text) : base64ToBytes(text);
+		}
+		function equalBytes(a, b) {
+		    return a.length === b.length && a.every((value, index) => value === b[index]);
+		}
+		/** Byte-wise order, a prefix first: how BIP-174 serializers sort map keys. */
+		function compareBytes(a, b) {
+		    for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+		        if (a[i] !== b[i])
+		            return a[i] < b[i] ? -1 : 1;
+		    }
+		    return a.length - b.length;
+		}
+		function readU32LE(bytes) {
+		    return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+		}
+		function hash160(bytes) {
+		    return ripemd160(sha256(bytes));
+		}
+		function taggedHash(tag, message) {
+		    const tagHash = sha256(asciiBytes(tag));
+		    return sha256(concatBytes(tagHash, tagHash, message));
+		}
+		function ecdsaV3Commitment(pubkey) {
+		    return taggedHash(AUTHSCRIPT_TAG, concatBytes(Uint8Array.of(ECDSA_WITNESS_VERSION, ECDSA_AUTH_TYPE), hash160(pubkey), sha256(OP_TRUE_SCRIPT)));
+		}
+		class Reader {
+		    bytes;
+		    label;
+		    offset = 0;
+		    constructor(bytes, label) {
+		        this.bytes = bytes;
+		        this.label = label;
+		    }
+		    get finished() {
+		        return this.offset === this.bytes.length;
+		    }
+		    readBytes(count) {
+		        if (count > this.bytes.length - this.offset) {
+		            throw new Error(`${this.label} is truncated (need ${count} byte(s) at offset ${this.offset})`);
+		        }
+		        const out = this.bytes.subarray(this.offset, this.offset + count);
+		        this.offset += count;
+		        return out;
+		    }
+		    /** Canonical CompactSize, bounded by the bytes left (every length or count here is). */
+		    readCompactSize() {
+		        const first = this.readBytes(1)[0];
+		        let value = BigInt(first);
+		        if (first >= 0xfd) {
+		            const width = first === 0xfd ? 2 : first === 0xfe ? 4 : 8;
+		            const bytes = this.readBytes(width);
+		            value = 0n;
+		            for (let i = width - 1; i >= 0; i -= 1)
+		                value = (value << 8n) | BigInt(bytes[i]);
+		            const minimum = width === 2 ? 0xfdn : width === 4 ? 0x10000n : 0x100000000n;
+		            if (value < minimum)
+		                throw new Error(`${this.label}: non-canonical CompactSize at offset ${this.offset - width - 1}`);
+		        }
+		        if (value > BigInt(this.bytes.length - this.offset)) {
+		            throw new Error(`${this.label} is truncated (length ${value} at offset ${this.offset})`);
+		        }
+		        return Number(value);
+		    }
+		    readMap(mapLabel) {
+		        const map = [];
+		        const seen = new Set();
+		        for (;;) {
+		            const keyLength = this.readCompactSize();
+		            if (keyLength === 0)
+		                return map;
+		            const key = this.readBytes(keyLength);
+		            const value = this.readBytes(this.readCompactSize());
+		            const keyHex = bytesToHex(key);
+		            if (seen.has(keyHex))
+		                throw new Error(`PSBT ${mapLabel}: duplicate key ${keyHex}`);
+		            seen.add(keyHex);
+		            map.push({ key, value });
+		        }
+		    }
+		}
+		function encodeWitnessStack(stack) {
+		    if (!Array.isArray(stack))
+		        throw new Error('finalScriptWitness must be an array of hex strings');
+		    return concatBytes(compactSize(stack.length), ...stack.map((element) => {
+		        const bytes = hexToBytes(ensureHex(element, 'witness element'));
+		        return concatBytes(compactSize(bytes.length), bytes);
+		    }));
+		}
+		function decodeWitnessStack(bytes, label) {
+		    const reader = new Reader(bytes, label);
+		    const count = reader.readCompactSize();
+		    const stack = [];
+		    for (let i = 0; i < count; i += 1)
+		        stack.push(bytesToHex(reader.readBytes(reader.readCompactSize())));
+		    if (!reader.finished)
+		        throw new Error(`${label} has trailing data`);
+		    return stack;
+		}
+		// BIP-66 DER structure followed by one sighash byte.
+		function isDerSignatureWithSighash(sig) {
+		    if (sig.length < 9 || sig.length > 73 || sig[0] !== 0x30 || sig[1] !== sig.length - 3)
+		        return false;
+		    const rLength = sig[3];
+		    if (sig[2] !== 0x02 || rLength === 0 || 5 + rLength >= sig.length)
+		        return false;
+		    const sLength = sig[5 + rLength];
+		    if (sig[4 + rLength] !== 0x02 || sLength === 0)
+		        return false;
+		    return rLength + sLength + 7 === sig.length;
+		}
+		function isPublicKey(pubkey) {
+		    return (pubkey.length === 33 && (pubkey[0] === 0x02 || pubkey[0] === 0x03)) || (pubkey.length === 65 && pubkey[0] === 0x04);
+		}
+		function encodePath(path, label) {
+		    if (typeof path !== 'string' || !/^m(\/\d+['h]?)*$/.test(path)) {
+		        throw new Error(`${label}: invalid derivation path "${path}"`);
+		    }
+		    return concatBytes(...path
+		        .split('/')
+		        .slice(1)
+		        .map((level) => {
+		        const hardened = /['h]$/.test(level);
+		        const index = Number(hardened ? level.slice(0, -1) : level);
+		        if (!Number.isSafeInteger(index) || index >= HARDENED)
+		            throw new Error(`${label}: derivation index out of range in "${path}"`);
+		        return u32LE(hardened ? index + HARDENED : index);
+		    }));
+		}
+		function decodePath(bytes) {
+		    let path = 'm';
+		    for (let offset = 0; offset < bytes.length; offset += 4) {
+		        const value = readU32LE(bytes.subarray(offset, offset + 4));
+		        path += `/${value & 0x7fffffff}${value >= HARDENED ? "'" : ''}`;
+		    }
+		    return path;
+		}
+		// ---------------------------------------------------------------------------
+		// Maps
+		function fieldName(map, key) {
+		    const names = map.startsWith('input') ? INPUT_FIELD_NAMES : map.startsWith('output') ? OUTPUT_FIELD_NAMES : {};
+		    const name = names[key[0]] ?? `key type 0x${key[0].toString(16).padStart(2, '0')}`;
+		    return key.length > 1 ? `${name} ${bytesToHex(key.subarray(1))}` : name;
+		}
+		function singleByteKey(entry, map) {
+		    if (entry.key.length !== 1)
+		        throw new Error(`PSBT ${map}: the ${fieldName(map, entry.key)} key has unexpected key data`);
+		}
+		function keyPublicKey(entry, map) {
+		    const pubkey = entry.key.subarray(1);
+		    if (!isPublicKey(pubkey))
+		        throw new Error(`PSBT ${map}: invalid public key in the ${fieldName(map, entry.key)} key`);
+		    return pubkey;
+		}
+		function decodeDerivation(entry, map) {
+		    const pubkey = keyPublicKey(entry, map);
+		    if (entry.value.length < 4 || entry.value.length % 4 !== 0) {
+		        throw new Error(`PSBT ${map}: BIP32 derivation value must be a fingerprint and 4-byte path elements`);
+		    }
+		    return { masterFingerprint: entry.value.subarray(0, 4), pubkey, path: decodePath(entry.value.subarray(4)) };
+		}
+		function decodeInputMap(map, label) {
+		    const view = { partialSig: [], bip32Derivation: [], unknown: [] };
+		    for (const entry of map) {
+		        const { key, value } = entry;
+		        switch (key[0]) {
+		            case PSBT_IN_NON_WITNESS_UTXO:
+		                singleByteKey(entry, label);
+		                view.previousTx = value;
+		                break;
+		            case PSBT_IN_WITNESS_UTXO: {
+		                singleByteKey(entry, label);
+		                const reader = new Reader(value, `PSBT ${label} witness UTXO`);
+		                const amountBytes = reader.readBytes(8);
+		                const amount = new DataView(amountBytes.buffer, amountBytes.byteOffset, 8).getBigInt64(0, true);
+		                const script = reader.readBytes(reader.readCompactSize());
+		                if (!reader.finished || amount < 0n)
+		                    throw new Error(`PSBT ${label}: malformed witness UTXO`);
+		                view.witnessUtxo = { script, value: amount };
+		                break;
+		            }
+		            case PSBT_IN_PARTIAL_SIG: {
+		                const pubkey = keyPublicKey(entry, label);
+		                if (!isDerSignatureWithSighash(value)) {
+		                    throw new Error(`PSBT ${label}: the signature for ${bytesToHex(pubkey)} is not DER followed by a sighash byte`);
+		                }
+		                view.partialSig.push({ pubkey, signature: value });
+		                break;
+		            }
+		            case PSBT_IN_SIGHASH_TYPE:
+		                singleByteKey(entry, label);
+		                if (value.length !== 4)
+		                    throw new Error(`PSBT ${label}: the sighash type must be 4 bytes`);
+		                view.sighashType = readU32LE(value);
+		                break;
+		            case PSBT_IN_REDEEM_SCRIPT:
+		                singleByteKey(entry, label);
+		                view.redeemScript = value;
+		                break;
+		            case PSBT_IN_WITNESS_SCRIPT:
+		                singleByteKey(entry, label);
+		                view.witnessScript = value;
+		                break;
+		            case PSBT_IN_BIP32_DERIVATION:
+		                view.bip32Derivation.push(decodeDerivation(entry, label));
+		                break;
+		            case PSBT_IN_FINAL_SCRIPTSIG:
+		                singleByteKey(entry, label);
+		                view.finalScriptSig = value;
+		                break;
+		            case PSBT_IN_FINAL_SCRIPTWITNESS:
+		                singleByteKey(entry, label);
+		                view.finalScriptWitness = decodeWitnessStack(value, `PSBT ${label} final script witness`);
+		                break;
+		            default:
+		                view.unknown.push(entry);
+		        }
+		    }
+		    return view;
+		}
+		function decodeOutputMap(map, label) {
+		    const view = { bip32Derivation: [], unknown: [] };
+		    for (const entry of map) {
+		        switch (entry.key[0]) {
+		            case PSBT_OUT_REDEEM_SCRIPT:
+		                singleByteKey(entry, label);
+		                view.redeemScript = entry.value;
+		                break;
+		            case PSBT_OUT_WITNESS_SCRIPT:
+		                singleByteKey(entry, label);
+		                view.witnessScript = entry.value;
+		                break;
+		            case PSBT_OUT_BIP32_DERIVATION:
+		                view.bip32Derivation.push(decodeDerivation(entry, label));
+		                break;
+		            default:
+		                view.unknown.push(entry);
+		        }
+		    }
+		    return view;
+		}
+		function encodeDerivation(type, derivation, label) {
+		    const fingerprint = hexToBytes(ensureHex(derivation.masterFingerprintHex, 'masterFingerprintHex'));
+		    if (fingerprint.length !== 4)
+		        throw new Error(`${label}: the master fingerprint must be 4 bytes`);
+		    return {
+		        key: concatBytes(Uint8Array.of(type), hexToBytes(ensureHex(derivation.pubkeyHex, 'pubkeyHex'))),
+		        value: concatBytes(fingerprint, encodePath(derivation.path, label))
+		    };
+		}
+		function encodeOutputFields(fields, index) {
+		    if (!fields || typeof fields !== 'object')
+		        throw new Error(`PSBT output ${index}: fields must be an object`);
+		    for (const name of Object.keys(fields)) {
+		        if (name !== 'bip32Derivation')
+		            throw new Error(`PSBT output ${index}: unknown field "${name}"`);
+		    }
+		    return (fields.bip32Derivation ?? []).map((derivation) => encodeDerivation(PSBT_OUT_BIP32_DERIVATION, derivation, `PSBT output ${index}`));
+		}
+		function encodeInputFields(fields, index) {
+		    if (!fields || typeof fields !== 'object')
+		        throw new Error(`PSBT input ${index}: fields must be an object`);
+		    for (const name of Object.keys(fields)) {
+		        if (!UPDATE_FIELDS.has(name))
+		            throw new Error(`PSBT input ${index}: unknown field "${name}"`);
+		    }
+		    const bytes = (hex, label) => hexToBytes(ensureHex(hex, label));
+		    const entries = [];
+		    const add = (type, keyData, value) => entries.push({ key: concatBytes(Uint8Array.of(type), keyData), value });
+		    const none = new Uint8Array();
+		    if (fields.previousTx !== undefined)
+		        add(PSBT_IN_NON_WITNESS_UTXO, none, bytes(fields.previousTx, 'previousTx'));
+		    if (fields.witnessUtxo !== undefined) {
+		        const value = toRawInteger(fields.witnessUtxo.valueSats, 'witnessUtxo.valueSats');
+		        if (value < 0n)
+		            throw new Error(`PSBT input ${index}: negative witnessUtxo value`);
+		        const script = bytes(fields.witnessUtxo.scriptPubKeyHex, 'witnessUtxo.scriptPubKeyHex');
+		        add(PSBT_IN_WITNESS_UTXO, none, concatBytes(i64LE(value), compactSize(script.length), script));
+		    }
+		    if (fields.witnessScript !== undefined)
+		        add(PSBT_IN_WITNESS_SCRIPT, none, bytes(fields.witnessScript, 'witnessScript'));
+		    if (fields.sighashType !== undefined) {
+		        const type = fields.sighashType;
+		        if (!Number.isInteger(type) || type < 0 || type > 0xffffffff)
+		            throw new Error(`PSBT input ${index}: invalid sighashType ${type}`);
+		        add(PSBT_IN_SIGHASH_TYPE, none, u32LE(type));
+		    }
+		    for (const derivation of fields.bip32Derivation ?? []) {
+		        entries.push(encodeDerivation(PSBT_IN_BIP32_DERIVATION, derivation, `PSBT input ${index}`));
+		    }
+		    for (const sig of fields.partialSig ?? []) {
+		        add(PSBT_IN_PARTIAL_SIG, bytes(sig.pubkeyHex, 'pubkeyHex'), bytes(sig.signatureHex, 'signatureHex'));
+		    }
+		    if (fields.finalScriptSig !== undefined)
+		        add(PSBT_IN_FINAL_SCRIPTSIG, none, bytes(fields.finalScriptSig, 'finalScriptSig'));
+		    if (fields.finalScriptWitness !== undefined) {
+		        add(PSBT_IN_FINAL_SCRIPTWITNESS, none, encodeWitnessStack(fields.finalScriptWitness));
+		    }
+		    return entries;
+		}
+		// ---------------------------------------------------------------------------
+		// Reading and writing
+		function assertUnsigned(tx, label) {
+		    if (tx.inputs.length === 0)
+		        throw new Error(`${label} has no inputs`);
+		    tx.inputs.forEach((input, index) => {
+		        if (input.scriptSigHex) {
+		            throw new Error(`${label}: input ${index} has a scriptSig (the transaction of a PSBT is unsigned)`);
+		        }
+		        if (input.witness && input.witness.length > 0) {
+		            throw new Error(`${label}: input ${index} has a witness (the transaction of a PSBT is unsigned)`);
+		        }
+		    });
+		}
+		/** The global transaction: unsigned, in the plain (non-witness) Neurai serialization. */
+		function parseUnsignedTransaction(bytes) {
+		    const hex = bytesToHex(bytes);
+		    let tx;
+		    try {
+		        tx = parseTransaction(hex);
+		    }
+		    catch (error) {
+		        throw new Error(`PSBT unsigned transaction is unreadable: ${error.message}`);
+		    }
+		    assertUnsigned(tx, 'PSBT unsigned transaction');
+		    if (serializeTransaction(tx, { includeWitness: false }) !== hex) {
+		        throw new Error('PSBT unsigned transaction is not in the plain serialization');
+		    }
+		    return tx;
+		}
+		/** Previous output of an input, its previous transaction checked against the outpoint. */
+		function previousOutputOf(input, outpoint, index) {
+		    if (input.previousTx) {
+		        const previousHex = bytesToHex(input.previousTx);
+		        let previous;
+		        try {
+		            previous = parseTransaction(previousHex);
+		        }
+		        catch (error) {
+		            throw new Error(`PSBT input ${index}: unreadable previous transaction (${error.message})`);
+		        }
+		        const txid = computeTxid(previous);
+		        if (txid !== outpoint.txid) {
+		            throw new Error(`PSBT input ${index}: the previous transaction is ${txid}, but the input spends ${outpoint.txid}:${outpoint.vout}`);
+		        }
+		        const output = previous.outputs[outpoint.vout];
+		        if (!output)
+		            throw new Error(`PSBT input ${index}: the previous transaction has no output ${outpoint.vout}`);
+		        if (input.witnessUtxo &&
+		            (bytesToHex(input.witnessUtxo.script) !== output.scriptPubKeyHex || input.witnessUtxo.value !== output.valueSats)) {
+		            throw new Error(`PSBT input ${index}: the witness UTXO contradicts the previous transaction`);
+		        }
+		        return { scriptPubKeyHex: output.scriptPubKeyHex, valueSats: output.valueSats };
+		    }
+		    if (input.witnessUtxo) {
+		        return { scriptPubKeyHex: bytesToHex(input.witnessUtxo.script), valueSats: input.witnessUtxo.value };
+		    }
+		    return null;
+		}
+		/** Parse and validate: structure, every interpreted field, and the profile rules. */
+		function loadPsbt(psbt) {
+		    const bytes = psbtBytes(psbt);
+		    if (bytes.length < PSBT_MAGIC.length || !equalBytes(bytes.subarray(0, PSBT_MAGIC.length), PSBT_MAGIC)) {
+		        throw new Error('Not a PSBT: missing the "psbt" magic and 0xff separator');
+		    }
+		    const reader = new Reader(bytes.subarray(PSBT_MAGIC.length), 'PSBT');
+		    const global = reader.readMap('global map');
+		    const txEntries = global.filter((entry) => entry.key[0] === PSBT_GLOBAL_UNSIGNED_TX);
+		    if (txEntries.length !== 1 || txEntries[0].key.length !== 1) {
+		        throw new Error('PSBT global map must hold exactly one unsigned transaction (PSBT version 0)');
+		    }
+		    const version = global.find((entry) => entry.key.length === 1 && entry.key[0] === PSBT_GLOBAL_VERSION);
+		    if (version && (version.value.length !== 4 || readU32LE(version.value) !== 0)) {
+		        throw new Error('Only PSBT version 0 is supported');
+		    }
+		    const tx = parseUnsignedTransaction(txEntries[0].value);
+		    const inputs = tx.inputs.map((_, index) => reader.readMap(`input ${index}`));
+		    const outputs = tx.outputs.map((_, index) => reader.readMap(`output ${index}`));
+		    if (!reader.finished)
+		        throw new Error('PSBT has data after its last output map');
+		    inputs.forEach((map, index) => previousOutputOf(decodeInputMap(map, `input ${index}`), tx.inputs[index], index));
+		    outputs.forEach((map, index) => decodeOutputMap(map, `output ${index}`));
+		    return { tx, global, inputs, outputs };
+		}
+		/** Canonical form: every map sorted by key, as BIP-174 serializers write it. */
+		function encodePsbt(loaded) {
+		    const map = (entries) => concatBytes(...[...entries]
+		        .sort((a, b) => compareBytes(a.key, b.key))
+		        .flatMap(({ key, value }) => [compactSize(key.length), key, compactSize(value.length), value]), Uint8Array.of(0));
+		    return bytesToBase64(concatBytes(PSBT_MAGIC, map(loaded.global), ...loaded.inputs.map(map), ...loaded.outputs.map(map)));
+		}
+		/** Union of key-value maps; the same key with a different value is a conflict, never a choice. */
+		function mergeMap(target, other, map) {
+		    for (const entry of other) {
+		        const existing = target.find((candidate) => equalBytes(candidate.key, entry.key));
+		        if (!existing) {
+		            target.push(entry);
+		        }
+		        else if (!equalBytes(existing.value, entry.value)) {
+		            throw new Error(`PSBT conflict in ${map}: ${fieldName(map, entry.key)} already holds a different value`);
+		        }
+		    }
+		}
+		/** Re-read after a change, so the result passes the same validation as any input. */
+		function revalidated(loaded) {
+		    return encodePsbt(loadPsbt(encodePsbt(loaded)));
+		}
+		function checkIndex(index, count, kind) {
+		    if (!Number.isInteger(index) || index < 0 || index >= count) {
+		        throw new Error(`PSBT has no ${kind} ${index} (it has ${count})`);
+		    }
+		}
+		// ---------------------------------------------------------------------------
+		// Public API
+		/** Creator + Updater: a PSBT for an unsigned transaction, with optional fields per input and output. */
+		function createPsbt(params) {
+		    const { unsignedTx } = params;
+		    const tx = typeof unsignedTx === 'string' ? parseTransaction(unsignedTx) : unsignedTx;
+		    assertUnsigned(tx, 'createPsbt: the transaction');
+		    const fields = params.inputs ?? [];
+		    if (fields.length > tx.inputs.length) {
+		        throw new Error(`createPsbt: fields for ${fields.length} inputs, but the transaction has ${tx.inputs.length}`);
+		    }
+		    const outputFields = params.outputs ?? [];
+		    if (outputFields.length > tx.outputs.length) {
+		        throw new Error(`createPsbt: fields for ${outputFields.length} outputs, but the transaction has ${tx.outputs.length}`);
+		    }
+		    const inputs = tx.inputs.map((_, index) => []);
+		    fields.forEach((inputFields, index) => {
+		        if (inputFields !== undefined)
+		            mergeMap(inputs[index], encodeInputFields(inputFields, index), `input ${index}`);
+		    });
+		    const outputs = tx.outputs.map((_, index) => []);
+		    outputFields.forEach((fieldsOfOutput, index) => {
+		        if (fieldsOfOutput !== undefined)
+		            mergeMap(outputs[index], encodeOutputFields(fieldsOfOutput, index), `output ${index}`);
+		    });
+		    return revalidated({
+		        global: [
+		            { key: Uint8Array.of(PSBT_GLOBAL_UNSIGNED_TX), value: hexToBytes(serializeTransaction(tx, { includeWitness: false })) }
+		        ],
+		        inputs,
+		        outputs
+		    });
+		}
+		/** Read a PSBT, enforcing the Neurai profile (previous transactions match their outpoints). */
+		function decodePsbt(psbt) {
+		    const { tx, global, inputs, outputs } = loadPsbt(psbt);
+		    const keyValues = (entries) => entries.map((entry) => ({ keyHex: bytesToHex(entry.key), valueHex: bytesToHex(entry.value) }));
+		    const derivations = (list) => list.map((derivation) => ({
+		        masterFingerprintHex: bytesToHex(derivation.masterFingerprint),
+		        pubkeyHex: bytesToHex(derivation.pubkey),
+		        path: derivation.path
+		    }));
+		    const hex = (bytes) => (bytes ? bytesToHex(bytes) : undefined);
+		    const defined = (object) => Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
+		    return {
+		        unsignedTx: tx,
+		        txid: computeTxid(tx),
+		        inputs: inputs.map((map, index) => {
+		            const view = decodeInputMap(map, `input ${index}`);
+		            return defined({
+		                previousTx: hex(view.previousTx),
+		                witnessUtxo: view.witnessUtxo && {
+		                    scriptPubKeyHex: bytesToHex(view.witnessUtxo.script),
+		                    valueSats: view.witnessUtxo.value
+		                },
+		                partialSig: view.partialSig.map((sig) => ({
+		                    pubkeyHex: bytesToHex(sig.pubkey),
+		                    signatureHex: bytesToHex(sig.signature)
+		                })),
+		                sighashType: view.sighashType,
+		                redeemScript: hex(view.redeemScript),
+		                witnessScript: hex(view.witnessScript),
+		                bip32Derivation: derivations(view.bip32Derivation),
+		                finalScriptSig: hex(view.finalScriptSig),
+		                finalScriptWitness: view.finalScriptWitness,
+		                unknown: keyValues(view.unknown)
+		            });
+		        }),
+		        outputs: outputs.map((map, index) => {
+		            const view = decodeOutputMap(map, `output ${index}`);
+		            return defined({
+		                redeemScript: hex(view.redeemScript),
+		                witnessScript: hex(view.witnessScript),
+		                bip32Derivation: derivations(view.bip32Derivation),
+		                unknown: keyValues(view.unknown)
+		            });
+		        }),
+		        unknown: keyValues(global.filter((entry) => entry.key[0] !== PSBT_GLOBAL_UNSIGNED_TX))
+		    };
+		}
+		/**
+		 * Add fields to one input. A field already present with the same value is
+		 * left as is; with a different value it is a conflict and throws.
+		 */
+		function updatePsbtInput(psbt, index, fields) {
+		    const loaded = loadPsbt(psbt);
+		    checkIndex(index, loaded.tx.inputs.length, 'input');
+		    mergeMap(loaded.inputs[index], encodeInputFields(fields, index), `input ${index}`);
+		    return revalidated(loaded);
+		}
+		/**
+		 * Combiner: union of PSBTs of the same transaction. Unlike BIP-174's
+		 * "pick one", a key present with different values is rejected.
+		 */
+		function combinePsbts(base, ...others) {
+		    const merged = loadPsbt(base);
+		    const baseTx = serializeTransaction(merged.tx, { includeWitness: false });
+		    for (const other of others.map(loadPsbt)) {
+		        if (serializeTransaction(other.tx, { includeWitness: false }) !== baseTx) {
+		            throw new Error('Cannot combine PSBTs of different transactions');
+		        }
+		        mergeMap(merged.global, other.global, 'global map');
+		        other.inputs.forEach((map, index) => mergeMap(merged.inputs[index], map, `input ${index}`));
+		        other.outputs.forEach((map, index) => mergeMap(merged.outputs[index], map, `output ${index}`));
+		    }
+		    return revalidated(merged);
+		}
+		/** Previous output (script and value) an input spends, from its previous transaction or witness UTXO. */
+		function getPsbtPreviousOutput(decoded, index) {
+		    checkIndex(index, decoded.unsignedTx.inputs.length, 'input');
+		    const input = decoded.inputs[index];
+		    const view = { };
+		    if (input?.previousTx)
+		        view.previousTx = hexToBytes(input.previousTx);
+		    if (input?.witnessUtxo) {
+		        view.witnessUtxo = { script: hexToBytes(input.witnessUtxo.scriptPubKeyHex), value: input.witnessUtxo.valueSats };
+		    }
+		    const previous = previousOutputOf(view, decoded.unsignedTx.inputs[index], index);
+		    if (!previous)
+		        throw new Error(`PSBT input ${index} carries neither its previous transaction nor a witness UTXO`);
+		    return previous;
+		}
+		function signatureFor(input, index, family, ownsKey) {
+		    if (input.partialSig.length === 0)
+		        throw new Error(`PSBT input ${index} (${family}) is not signed`);
+		    const match = input.partialSig.find((sig) => ownsKey(sig.pubkey));
+		    if (!match)
+		        throw new Error(`PSBT input ${index}: no signature from the key its ${family} previous output pays to`);
+		    const used = match.signature[match.signature.length - 1];
+		    if (input.sighashType !== undefined && used !== input.sighashType) {
+		        throw new Error(`PSBT input ${index}: the signature uses sighash 0x${used.toString(16).padStart(2, '0')}, ` +
+		            `but the input asks for 0x${input.sighashType.toString(16).padStart(2, '0')}`);
+		    }
+		    return match;
+		}
+		/** Final key-value pairs of one input: final scripts built (or kept), signing data cleared. */
+		function finalizeInputMap(map, outpoint, index) {
+		    const input = decodeInputMap(map, `input ${index}`);
+		    const finals = [];
+		    if (!input.finalScriptSig && !input.finalScriptWitness) {
+		        const previous = previousOutputOf(input, outpoint, index);
+		        if (!previous)
+		            throw new Error(`PSBT input ${index} carries neither its previous transaction nor a witness UTXO`);
+		        const kind = classifyScriptPubKey(previous.scriptPubKeyHex);
+		        const program = kind.program ?? new Uint8Array();
+		        if (kind.type === 'p2pkh') {
+		            const sig = signatureFor(input, index, 'P2PKH', (pubkey) => equalBytes(hash160(pubkey), program));
+		            finals.push({
+		                key: Uint8Array.of(PSBT_IN_FINAL_SCRIPTSIG),
+		                value: concatBytes(pushData(sig.signature), pushData(sig.pubkey))
+		            });
+		        }
+		        else if (kind.type === 'ecdsa') {
+		            const sig = signatureFor(input, index, 'ECDSA (AuthScript v3)', (pubkey) => pubkey.length === 33 && equalBytes(ecdsaV3Commitment(pubkey), program));
+		            finals.push({
+		                key: Uint8Array.of(PSBT_IN_FINAL_SCRIPTWITNESS),
+		                value: encodeWitnessStack([
+		                    bytesToHex(Uint8Array.of(ECDSA_AUTH_TYPE)),
+		                    bytesToHex(sig.signature),
+		                    bytesToHex(sig.pubkey),
+		                    bytesToHex(OP_TRUE_SCRIPT)
+		                ])
+		            });
+		        }
+		        else if (kind.type === 'authscript' || kind.type === 'pq') {
+		            throw new Error(`PSBT input ${index}: an AuthScript v${kind.witnessVersion} input is finalized by its signer ` +
+		                '(final script witness), and this one has none');
+		        }
+		        else {
+		            throw new Error(`PSBT input ${index}: no finalization template for scriptPubKey ${previous.scriptPubKeyHex}`);
+		        }
+		    }
+		    return [...map.filter((entry) => !CLEARED_ON_FINALIZE.has(entry.key[0])), ...finals];
+		}
+		/**
+		 * Finalizer. P2PKH and strict ECDSA (AuthScript v3) inputs are completed from
+		 * their `partialSig`; inputs that already carry finalScriptSig/finalScriptWitness
+		 * (covenant branches, PQ) are kept. A signature whose sighash byte differs from
+		 * the input's `sighashType` is rejected. Finalized inputs keep only the UTXO,
+		 * the final scripts and the fields this module does not interpret.
+		 */
+		function finalizePsbt(psbt, options = {}) {
+		    const loaded = loadPsbt(psbt);
+		    const count = loaded.tx.inputs.length;
+		    const selection = options.inputs ?? 'all';
+		    let indexes;
+		    if (selection === 'all') {
+		        indexes = loaded.tx.inputs.map((_, index) => index);
+		    }
+		    else if (Array.isArray(selection)) {
+		        selection.forEach((index) => checkIndex(index, count, 'input'));
+		        indexes = [...new Set(selection)];
+		    }
+		    else {
+		        throw new Error(`finalizePsbt: inputs must be 'all' or a list of indexes`);
+		    }
+		    for (const index of indexes) {
+		        loaded.inputs[index] = finalizeInputMap(loaded.inputs[index], loaded.tx.inputs[index], index);
+		    }
+		    return revalidated(loaded);
+		}
+		/**
+		 * Extractor: the network transaction from the final scripts. Inputs without
+		 * them make it throw, unless `allowIncomplete` is set: they are then left
+		 * empty and listed in `incomplete` (for callers that add other unlocking data).
+		 */
+		function extractPsbtTransaction(psbt, options = {}) {
+		    const loaded = loadPsbt(psbt);
+		    const incomplete = [];
+		    const inputs = loaded.tx.inputs.map((outpoint, index) => {
+		        const input = decodeInputMap(loaded.inputs[index], `input ${index}`);
+		        if (!input.finalScriptSig && !input.finalScriptWitness) {
+		            incomplete.push(index);
+		            return { ...outpoint };
+		        }
+		        const signed = {
+		            ...outpoint,
+		            scriptSigHex: input.finalScriptSig ? bytesToHex(input.finalScriptSig) : ''
+		        };
+		        if (input.finalScriptWitness)
+		            signed.witness = input.finalScriptWitness;
+		        return signed;
+		    });
+		    if (incomplete.length > 0 && !options.allowIncomplete) {
+		        throw new Error(`PSBT is not finalized: input(s) ${incomplete.join(', ')} have no final scriptSig or witness`);
+		    }
+		    const hex = serializeTransaction({ ...loaded.tx, inputs });
+		    return { hex, txid: computeTxid(hex), incomplete };
+		}
+
 		dist.AUTHSCRIPT_MAINNET_HRP = AUTHSCRIPT_MAINNET_HRP;
 		dist.AUTHSCRIPT_TESTNET_HRP = AUTHSCRIPT_TESTNET_HRP;
 		dist.DEFAULT_ASSET_MARKER = DEFAULT_ASSET_MARKER;
@@ -3783,6 +4686,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.assetPayloadPrefix = assetPayloadPrefix;
 		dist.assetUnitsToRaw = assetUnitsToRaw;
 		dist.classifyScriptPubKey = classifyScriptPubKey;
+		dist.combinePsbts = combinePsbts;
 		dist.computeTxid = computeTxid;
 		dist.computeWtxid = computeWtxid;
 		dist.createAssetTransferOutput = createAssetTransferOutput;
@@ -3805,6 +4709,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.createOwnerAssetIssueOutput = createOwnerAssetIssueOutput;
 		dist.createOwnerAssetTransferOutput = createOwnerAssetTransferOutput;
 		dist.createPaymentTransaction = createPaymentTransaction;
+		dist.createPsbt = createPsbt;
 		dist.createQualifierTagTransaction = createQualifierTagTransaction;
 		dist.createReissueAssetOutput = createReissueAssetOutput;
 		dist.createReissueRestrictedTransaction = createReissueRestrictedTransaction;
@@ -3818,6 +4723,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.decimalToSatoshis = decimalToSatoshis;
 		dist.decodeAddress = decodeAddress;
 		dist.decodeAssetDataReferenceHex = decodeAssetDataReferenceHex;
+		dist.decodePsbt = decodePsbt;
 		dist.encodeAssetDataReference = encodeAssetDataReference;
 		dist.encodeAssetTransferPayload = encodeAssetTransferPayload;
 		dist.encodeAssetTransferScript = encodeAssetTransferScript;
@@ -3842,12 +4748,15 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.encodeVerifierStringScript = encodeVerifierStringScript;
 		dist.encodeWitnessProgramScript = encodeWitnessProgramScript;
 		dist.estimateTransactionSize = estimateTransactionSize;
+		dist.extractPsbtTransaction = extractPsbtTransaction;
+		dist.finalizePsbt = finalizePsbt;
 		dist.formatAssetDataReferenceHex = formatAssetDataReferenceHex;
 		dist.getBurnAddressForOperation = getBurnAddressForOperation;
 		dist.getBurnAmountSats = getBurnAmountSats;
 		dist.getBurnAmountXna = getBurnAmountXna;
 		dist.getOwnerTokenName = getOwnerTokenName;
 		dist.getParentAssetName = getParentAssetName;
+		dist.getPsbtPreviousOutput = getPsbtPreviousOutput;
 		dist.getUniqueAssetName = getUniqueAssetName;
 		dist.inferNetworkFromAnyAddress = inferNetworkFromAnyAddress;
 		dist.isCidV0AssetReference = isCidV0AssetReference;
@@ -3865,6 +4774,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		dist.serializeOutput = serializeOutput;
 		dist.serializeTransaction = serializeTransaction;
 		dist.toRawInteger = toRawInteger;
+		dist.updatePsbtInput = updatePsbtInput;
 		dist.xnaToSatoshis = xnaToSatoshis;
 		
 		return dist;
@@ -4676,12 +5586,12 @@ var NeuraiAssetsBundle = (function (exports) {
 		      // QUALIFIER or SUB_QUALIFIER: #NAME or #ROOT/SUB
 		      if (cleanName.includes('/')) {
 		        type = AssetType.SUB_QUALIFIER;
-		    // El padre es el INMEDIATO, no la raíz: el dueño de "A/B/C" es "A/B!".
-		    // El nodo lo resuelve con find_last_of (assets.cpp GetParentName, misma
-		    // rama para SUB y DEPIN). Partir por el primer '/' devolvía "A", así que
-		    // toda emisión de tercer nivel buscaba el token owner equivocado y el nodo
-		    // la rechazaba con «Trying to create outpoint for asset that you don't
-		    // have».
+		    // The parent is the IMMEDIATE one, not the root: "A/B/C" is owned by
+		    // "A/B!". The node resolves it with find_last_of (assets.cpp
+		    // GetParentName, same branch for SUB and DEPIN). Splitting on the first
+		    // '/' returned "A", so every third-level issuance looked up the wrong
+		    // owner token and the node rejected it with "Trying to create outpoint
+		    // for asset that you don't have".
 		        const slash = cleanName.lastIndexOf('/');
 		        parent = cleanName.slice(0, slash);
 		        subName = cleanName.slice(slash + 1);
@@ -8344,14 +9254,22 @@ var NeuraiAssetsBundle = (function (exports) {
 		const MAX_EXACT_FRACTIONAL = Number.MAX_SAFE_INTEGER / 1e8;
 
 		/**
+		 * The registered symbol that lossless-json 4.3.2 and later read to recognise
+		 * a LosslessNumber. Earlier versions read the `isLosslessNumber` property.
+		 */
+		const LOSSLESS_NUMBER_MARKER = Symbol.for('lossless-json.LosslessNumber');
+
+		/**
 		 * An exact decimal serialized as a bare JSON number token.
 		 *
 		 * Same shape as `rpcNumber()` from @neuraiproject/neurai-rpc: its
-		 * `stringifyRpcJson` (lossless-json) writes any object flagged
-		 * `isLosslessNumber` through `toString()`. It is defined here instead of
-		 * imported because the bundles inline every dependency and neurai-rpc carries
-		 * its whole RPC reference. With another serializer it stays an object, which
-		 * the node rejects: it can never become a different amount.
+		 * `stringifyRpcJson` (lossless-json) writes a LosslessNumber through
+		 * `toString()`. lossless-json up to 4.3.1 recognises one by its
+		 * `isLosslessNumber` property and 4.3.2 onwards by the registered
+		 * `lossless-json.LosslessNumber` symbol, so both are set. It is defined here
+		 * instead of imported because the bundles inline every dependency and
+		 * neurai-rpc carries its whole RPC reference. With another serializer it stays
+		 * an object, which the node rejects: it can never become a different amount.
 		 */
 		class RpcDecimal {
 		  /**
@@ -8360,6 +9278,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		  constructor(text) {
 		    this.isLosslessNumber = true;
 		    this.value = text;
+		  }
+
+		  get [LOSSLESS_NUMBER_MARKER]() {
+		    return true;
 		  }
 
 		  toString() {
@@ -9684,9 +10606,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		      throw new Error('Cannot parse parent asset from SUB asset name');
 		    }
 
-		    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-		    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-		    // sitio de siempre, así que el orden de los errores no cambia.
+		    // The owner token depends on nothing that follows, so asking for it
+		    // alongside the asset reads saves a whole round trip. It is AWAITED where
+		    // it always was, so the order errors surface in does not change.
 		    const ownerTokenName = AssetNameParser.getOwnerTokenName(parentAssetName);
 		    const addresses = await this._getAddresses();
 		    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -9695,9 +10617,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		    );
 		    ownerTokenLookup.catch(() => {});
 
-		    // 3-4. Existencia del padre y del sub: independientes entre sí, así que
-		    // se preguntan a la vez. Se comprueban en el mismo orden de antes, luego
-		    // «no existe el padre» sigue ganando a «el sub ya existe».
+		    // 3-4. Parent and sub existence are independent of each other, so both
+		    // are asked at once. They are checked in the same order as before, so
+		    // "parent does not exist" still wins over "the sub already exists".
 		    const [parentExists, subExists] = await Promise.all([
 		      this.assetExists(parentAssetName),
 		      this.assetExists(assetName)
@@ -9744,10 +10666,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
-		      // El token owner que la operación GASTA y devuelve viaja como
-		      // transferencia (lleva importe), no con el payload 'owner', que sólo
-		      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
-		      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+		      // The owner token an operation SPENDS and returns travels as a
+		      // transfer (it carries an amount), not with the 'owner' payload, which
+		      // only describes the token an issuance CREATES. Sizing it as 'owner'
+		      // left the transaction 8 bytes below what the node charges.
 		      { address: changeAddress, assetName: ownerTokenName },
 		      { address: toAddress, assetName, kind: 'issue', hasIpfs },
 		      { address: changeAddress, assetName: `${assetName}!`, kind: 'owner' },
@@ -9959,11 +10881,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		      ipfsHash = ''
 		    } = this.params;
 
-		    // Un sub-DePIN ("&RAIZ/SENSOR") sigue siendo AssetType::DEPIN para el nodo
-		    // —misma quema que la raíz— pero exige GASTAR y devolver el token owner del
-		    // padre inmediato, igual que cualquier sub-asset (assets.cpp:731, :3784).
-		    // Sin ese input el nodo rechaza con «Trying to create outpoint for asset
-		    // that you don't have: &RAIZ!».
+		    // A sub-DEPIN ("&ROOT/SENSOR") is still AssetType::DEPIN to the node —
+		    // same burn as a root — but it requires SPENDING and returning the
+		    // immediate parent's owner token, like any sub-asset (assets.cpp:731,
+		    // :3784). Without that input the node rejects it with "Trying to create
+		    // outpoint for asset that you don't have: &ROOT!".
 		    const parentAssetName = AssetNameParser.getParent(assetName);
 		    const parentOwnerTokenName = parentAssetName
 		      ? AssetNameParser.getOwnerTokenName(parentAssetName)
@@ -10016,7 +10938,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
-		      // La escolta del padre se devuelve como transferencia: lleva importe.
+		      // The parent's escort is returned as a transfer: it carries an amount.
 		      ...(parentOwnerUTXO
 		        ? [{ address: changeAddress, assetName: parentOwnerTokenName }]
 		        : []),
@@ -10213,11 +11135,11 @@ var NeuraiAssetsBundle = (function (exports) {
 		      newIpfs
 		    } = this.params;
 
-		    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-		    // los datos del asset ahorra una ida y vuelta completa. Se ESPERA en su
-		    // sitio de siempre (paso 6), así que el orden de los errores no cambia:
-		    // «el asset no existe» y «no es reemitible» se siguen lanzando antes que
-		    // «no tienes el token owner».
+		    // The owner token depends on nothing that follows, so asking for it
+		    // alongside the asset data saves a whole round trip. It is AWAITED where
+		    // it always was (step 6), so the order errors surface in does not change:
+		    // "asset does not exist" and "not reissuable" still throw before "you do
+		    // not own the owner token".
 		    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
 		    const addresses = await this._getAddresses();
 		    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -10289,10 +11211,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
-		      // El token owner que la operación GASTA y devuelve viaja como
-		      // transferencia (lleva importe), no con el payload 'owner', que sólo
-		      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
-		      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+		      // The owner token an operation SPENDS and returns travels as a
+		      // transfer (it carries an amount), not with the 'owner' payload, which
+		      // only describes the token an issuance CREATES. Sizing it as 'owner'
+		      // left the transaction 8 bytes below what the node charges.
 		      { address: changeAddress, assetName: ownerTokenName },
 		      { address: toAddress, assetName, kind: 'reissue', hasIpfs: Boolean(newIpfs) },
 		    ];
@@ -10561,7 +11483,7 @@ var NeuraiAssetsBundle = (function (exports) {
 		      ...recipients.map(r => ({ address: r.address, assetName })),
 		      { address: changeAddress, assetName }, // asset change (harmless over-count if absent)
 		      ...(isDepin
-		        // Escolta: se gasta y se devuelve, luego es una transferencia.
+		        // Escort: spent and returned, so it is a transfer.
 		        ? [{ address: changeAddress, assetName: ownerTokenName }]
 		        : []),
 		    ];
@@ -10846,9 +11768,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		      ipfsHashes = []
 		    } = this.params;
 
-		    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-		    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-		    // sitio de siempre, así que el orden de los errores no cambia.
+		    // The owner token depends on nothing that follows, so asking for it
+		    // alongside the asset reads saves a whole round trip. It is AWAITED where
+		    // it always was, so the order errors surface in does not change.
 		    const ownerTokenName = AssetNameParser.getOwnerTokenName(rootName);
 		    const addresses = await this._getAddresses();
 		    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -10867,10 +11789,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    }
 
 		    // 3. Check if any of the unique assets already exist.
-		    // En fila, emitir diez únicos costaba diez idas y vueltas antes de
-		    // empezar a construir. Ninguna depende de la anterior. El resultado se
-		    // recorre en orden, así que el error sigue nombrando el primer nombre
-		    // repetido de la lista, no el que el nodo conteste primero.
+		    // In sequence, issuing ten uniques cost ten round trips before building
+		    // could even start, and none of them depends on the previous one. The
+		    // result is walked in order, so the error still names the first taken
+		    // name in the list, not whichever the node answers first.
 		    const uniqueNames = assetTags.map(tag => `${rootName}#${tag}`);
 		    const uniqueExists = await Promise.all(
 		      uniqueNames.map(fullName => this.assetExists(fullName))
@@ -10912,10 +11834,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
-		      // El token owner que la operación GASTA y devuelve viaja como
-		      // transferencia (lleva importe), no con el payload 'owner', que sólo
-		      // describe el token que una emisión CREA. Estimarlo como 'owner' dejaba
-		      // la transacción 8 bytes por debajo de lo que el nodo cobra.
+		      // The owner token an operation SPENDS and returns travels as a
+		      // transfer (it carries an amount), not with the 'owner' payload, which
+		      // only describes the token an issuance CREATES. Sizing it as 'owner'
+		      // left the transaction 8 bytes below what the node charges.
 		      { address: changeAddress, assetName: ownerTokenName },
 		      ...assetTags.map(tag => ({
 		        address: toAddress,
@@ -11400,9 +12322,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		      ipfsHash = ''
 		    } = this.params;
 
-		    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-		    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-		    // sitio de siempre, así que el orden de los errores no cambia.
+		    // The owner token depends on nothing that follows, so asking for it
+		    // alongside the asset reads saves a whole round trip. It is AWAITED where
+		    // it always was, so the order errors surface in does not change.
 		    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
 		    const addresses = await this._getAddresses();
 		    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -11445,10 +12367,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    }
 
 		    // 7. Estimate fee (+1 for owner token input)
-		    // Las salidas de asset deben describirse como lo que el nodo serializa.
-		    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
-		    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
-		    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+		    // Asset outputs must be described as what the node serializes. As bare
+		    // addresses they counted 34 bytes each and the whole payload went unpaid;
+		    // the null-data ones (tag, freeze, verifier) carry no destination at all:
+		    // their script REPLACES the P2PKH.
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
@@ -11664,9 +12586,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		      newIpfs
 		    } = this.params;
 
-		    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-		    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-		    // sitio de siempre, así que el orden de los errores no cambia.
+		    // The owner token depends on nothing that follows, so asking for it
+		    // alongside the asset reads saves a whole round trip. It is AWAITED where
+		    // it always was, so the order errors surface in does not change.
 		    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
 		    const addresses = await this._getAddresses();
 		    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -11732,10 +12654,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const burnInfo = this.burnManager.getReissueBurn();
 
 		    // 8. Estimate fee
-		    // Las salidas de asset deben describirse como lo que el nodo serializa.
-		    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
-		    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
-		    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+		    // Asset outputs must be described as what the node serializes. As bare
+		    // addresses they counted 34 bytes each and the whole payload went unpaid;
+		    // the null-data ones (tag, freeze, verifier) carry no destination at all:
+		    // their script REPLACES the P2PKH.
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
@@ -12003,16 +12925,16 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		    // 6. Estimate fee
 		    // Outputs: burn + XNA change + tag/untag operation (sent to changeAddress)
-		    // Las salidas de asset deben describirse como lo que el nodo serializa.
-		    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
-		    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
-		    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+		    // Asset outputs must be described as what the node serializes. As bare
+		    // addresses they counted 34 bytes each and the whole payload went unpaid;
+		    // the null-data ones (tag, freeze, verifier) carry no destination at all:
+		    // their script REPLACES the P2PKH.
 		    const outputAddresses = [
 		      burnInfo.address,
 		      changeAddress,
-		      // El nodo devuelve el resto del qualifier a la dirección de cambio.
+		      // The node returns the qualifier remainder to the change address.
 		      { address: changeAddress, assetName: qualifierName },
-		      // Una salida de datos nulos por dirección etiquetada.
+		      // One null-data output per tagged address.
 		      ...targetAddresses.map(target => ({
 		        address: target, assetName: qualifierName, kind: 'tag'
 		      }))
@@ -12169,11 +13091,11 @@ var NeuraiAssetsBundle = (function (exports) {
 	 * - Cost: No burn (but requires fee)
 	 * - Requires the asset's owner token ($ASSET! or &ASSET!)
 	 *
-	 * Un DePIN se congela con la MISMA transacción que un restringido: escolta del
-	 * token owner más una salida de datos nulos con (nombre, flag). Es literalmente
-	 * lo que construye el nodo en UpdateDEPINAddressRestriction (rpc/assets.cpp:70),
-	 * así que comparte builder en vez de tener uno paralelo que acabaría
-	 * divergiendo.
+	 * A DEPIN asset is frozen with the SAME transaction as a restricted one: the
+	 * owner-token escort plus one null-asset-data output carrying (name, flag).
+	 * That is literally what the node builds in UpdateDEPINAddressRestriction
+	 * (rpc/assets.cpp:70), so it shares this builder instead of having a parallel
+	 * one that would eventually drift.
 	 * - Owner token must be returned
 	 */
 
@@ -12200,9 +13122,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		      throw new Error('assetName is required');
 		    }
 
-		    // Restringido o DePIN: son los dos tipos que el nodo admite aquí
-		    // (assets.cpp:4496 acepta QUALIFIER, SUB_QUALIFIER, RESTRICTED y DEPIN;
-		    // los qualifiers usan tag/untag, no esta operación).
+		    // Restricted or DEPIN: the two types the node accepts here
+		    // (assets.cpp:4496 allows QUALIFIER, SUB_QUALIFIER, RESTRICTED and DEPIN;
+		    // qualifiers use tag/untag, not this operation).
 		    this.validateAssetName(
 		      params.assetName,
 		      AssetNameParser.isDepin(params.assetName) ? 'DEPIN' : 'RESTRICTED'
@@ -12242,9 +13164,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		    const { assetName } = this.params;
 		    const isDepin = AssetNameParser.isDepin(assetName);
 
-		    // La congelación global es de assets restringidos: el nodo la expone como
-		    // checkglobalrestriction y no tiene equivalente DePIN. Un DePIN se
-		    // gestiona dispositivo a dispositivo.
+		    // Global freeze belongs to restricted assets: the node exposes it as
+		    // checkglobalrestriction and there is no DEPIN equivalent. A DEPIN asset
+		    // is managed holder by holder.
 		    if (isDepin && (operationType === 'FREEZE_ASSET' || operationType === 'UNFREEZE_ASSET')) {
 		      throw new Error(
 		        `Global freeze does not apply to DEPIN assets (${assetName}). ` +
@@ -12252,9 +13174,9 @@ var NeuraiAssetsBundle = (function (exports) {
 		      );
 		    }
 
-		    // El token owner no depende de nada de lo que sigue: pedirlo a la vez que
-		    // las lecturas del asset ahorra una ida y vuelta completa. Se ESPERA en su
-		    // sitio de siempre, así que el orden de los errores no cambia.
+		    // The owner token depends on nothing that follows, so asking for it
+		    // alongside the asset reads saves a whole round trip. It is AWAITED where
+		    // it always was, so the order errors surface in does not change.
 		    const ownerTokenName = AssetNameParser.getOwnerTokenName(assetName);
 		    const addresses = await this._getAddresses();
 		    const ownerTokenLookup = this.ownerTokenManager.findOwnerTokenUTXO(
@@ -12289,10 +13211,10 @@ var NeuraiAssetsBundle = (function (exports) {
 		      throw error;
 		    }
 
-		    // La dirección que sostiene el token owner no puede congelarse ni
-		    // revocarse: el nodo lo rechaza (rpc/assets.cpp:106) y, si se colara,
-		    // dejaría el asset sin nadie que pudiera descongelarlo. Se comprueba aquí
-		    // para dar el motivo en vez de un error de consenso.
+		    // The address holding the owner token cannot be frozen or revoked: the
+		    // node rejects it (rpc/assets.cpp:106) and, if it slipped through, it
+		    // would leave the asset with nobody able to unfreeze it. Checked here so
+		    // the reason is stated instead of surfacing as a consensus error.
 		    const targets = this.params.addresses || [];
 		    if (targets.includes(ownerTokenUTXO.address)) {
 		      throw new Error(
@@ -12306,15 +13228,15 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		    // 6. Estimate fee
 		    // Outputs: XNA change + freeze/unfreeze operation (sent to changeAddress)
-		    // Las salidas de asset deben describirse como lo que el nodo serializa.
-		    // Como direcciones desnudas se contaban 34 bytes por salida y el payload
-		    // entero quedaba sin pagar; las de datos nulos (tag, congelación,
-		    // verificador) ni siquiera llevan destino: su script SUSTITUYE al P2PKH.
+		    // Asset outputs must be described as what the node serializes. As bare
+		    // addresses they counted 34 bytes each and the whole payload went unpaid;
+		    // the null-data ones (tag, freeze, verifier) carry no destination at all:
+		    // their script REPLACES the P2PKH.
 		    const isGlobal = operationType === 'FREEZE_ASSET' || operationType === 'UNFREEZE_ASSET';
 		    const frozenAddresses = isGlobal ? [] : (this.params.addresses || []);
 		    const outputAddresses = [
 		      changeAddress,
-		      // El token owner se gasta y se devuelve: transferencia.
+		      // The owner token is spent and returned: a transfer.
 		      { address: changeAddress, assetName: ownerTokenName },
 		      ...(isGlobal
 		        ? [{ assetName, kind: 'globalRestriction' }]
@@ -12420,12 +13342,12 @@ var NeuraiAssetsBundle = (function (exports) {
 
 		    // 14. Create raw transaction.
 		    //
-		    // Para un DePIN el `createrawtransaction` del nodo no sirve: su objeto
-		    // freeze_addresses exige un nombre restringido y responde «a valid
-		    // restricted asset name must be provided». Es un límite de esa interfaz
-		    // RPC, no de la operación —el nodo acepta la transacción perfectamente—,
-		    // así que el hex sale del códec local, igual que ya hacen las reemisiones
-		    // desde 1.5.0. Para restringidos se conserva la ruta de siempre.
+		    // For a DEPIN asset the node's `createrawtransaction` is no use: its
+		    // freeze_addresses object demands a restricted name and answers "a valid
+		    // restricted asset name must be provided". That is a limit of that RPC
+		    // interface, not of the operation — the node accepts the transaction
+		    // perfectly well — so the hex comes from the local codec, as reissues
+		    // already do since 1.5.0. Restricted assets keep the usual path.
 		    const rawTx = isDepin
 		      ? this.buildRawTransactionLocally(createTransactionBuild)
 		      : await this.buildRawTransaction(inputs, orderedOutputs);

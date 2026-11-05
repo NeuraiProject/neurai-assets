@@ -204,6 +204,13 @@ describe('toRpcAmount', () => {
     }
   });
 
+  it('is recognised by lossless-json before and after 4.3.2', () => {
+    const amount = new RpcDecimal('9876543210.12345678');
+    // lossless-json up to 4.3.1 reads the property; 4.3.2 onwards the registered symbol.
+    expect(amount.isLosslessNumber).to.equal(true);
+    expect(amount[Symbol.for('lossless-json.LosslessNumber')]).to.equal(true);
+  });
+
   it('never lets a decimal pass as a quoted string or a different amount', () => {
     // A serializer other than neurai-rpc leaves an object, which the node rejects.
     expect(JSON.stringify({ asset_quantity: toRpcAmount('9876543210.12345678') }))

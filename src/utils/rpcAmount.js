@@ -37,14 +37,22 @@ const TRANSFER_NON_AMOUNT_KEYS = ['message', 'expire_time'];
 const MAX_EXACT_FRACTIONAL = Number.MAX_SAFE_INTEGER / 1e8;
 
 /**
+ * The registered symbol that lossless-json 4.3.2 and later read to recognise
+ * a LosslessNumber. Earlier versions read the `isLosslessNumber` property.
+ */
+const LOSSLESS_NUMBER_MARKER = Symbol.for('lossless-json.LosslessNumber');
+
+/**
  * An exact decimal serialized as a bare JSON number token.
  *
  * Same shape as `rpcNumber()` from @neuraiproject/neurai-rpc: its
- * `stringifyRpcJson` (lossless-json) writes any object flagged
- * `isLosslessNumber` through `toString()`. It is defined here instead of
- * imported because the bundles inline every dependency and neurai-rpc carries
- * its whole RPC reference. With another serializer it stays an object, which
- * the node rejects: it can never become a different amount.
+ * `stringifyRpcJson` (lossless-json) writes a LosslessNumber through
+ * `toString()`. lossless-json up to 4.3.1 recognises one by its
+ * `isLosslessNumber` property and 4.3.2 onwards by the registered
+ * `lossless-json.LosslessNumber` symbol, so both are set. It is defined here
+ * instead of imported because the bundles inline every dependency and
+ * neurai-rpc carries its whole RPC reference. With another serializer it stays
+ * an object, which the node rejects: it can never become a different amount.
  */
 class RpcDecimal {
   /**
@@ -53,6 +61,10 @@ class RpcDecimal {
   constructor(text) {
     this.isLosslessNumber = true;
     this.value = text;
+  }
+
+  get [LOSSLESS_NUMBER_MARKER]() {
+    return true;
   }
 
   toString() {
