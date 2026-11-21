@@ -114,6 +114,8 @@ export type AssetMarker = 'rvn' | 'xna';
 export type AssetMarkerPolicy = 'strict' | 'legacy-fallback';
 
 export interface NeuraiAssetsConfig {
+  /** Lower bound for virtual size when pricing each round of XNA input selection. */
+  minPolicyVsize?: number;
   network?: string;
   addresses?: string[];
   changeAddress?: string | null;

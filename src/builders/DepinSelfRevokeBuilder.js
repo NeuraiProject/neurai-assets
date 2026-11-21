@@ -147,7 +147,7 @@ class DepinSelfRevokeBuilder extends BaseAssetTransactionBuilder {
 
     // El `createrawtransaction` del nodo no sabe expresar esta operación, así
     // que el hex sale del códec local; el nodo sí acepta el resultado.
-    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
+    const rawTx = this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs);
 
     return this.formatResult(
       rawTx,

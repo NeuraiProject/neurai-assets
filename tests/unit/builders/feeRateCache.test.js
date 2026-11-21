@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const IssueRootBuilder = require('../../../src/builders/IssueRootBuilder');
 
-const LEGACY_ADDRESS = 'mgRYHdMqD1gwm9QQqBRUPcDKdEZ9oVeChA';
+const { ADDR: [LEGACY_ADDRESS] } = require('../../fixtures/addresses');
 
 describe('BaseAssetTransactionBuilder fee-rate caching', () => {
   it('calls estimatesmartfee at most once per build', async () => {

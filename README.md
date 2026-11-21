@@ -1287,3 +1287,5 @@ conversion with `rawToDisplayAmount` or `formatRawAsDecimal`. These are not drop
 replacements for legacy formatting or deliberate rounding. Keep user input as
 text; validate divisibility instead of silently rounding it. A display number can
 use exponent notation for tiny values, so use `formatRawAsDecimal` for plain text.
+
+When the execution work of an asset spend is known, set `minPolicyVsize` in the `NeuraiAssets` constructor options to its measured or estimated policy vsize. Every funding round applies the fee rate to the larger of that minimum and the serialized size estimate, including any extra XNA inputs needed for the fee.

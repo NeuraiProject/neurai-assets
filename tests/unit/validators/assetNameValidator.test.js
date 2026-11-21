@@ -269,3 +269,12 @@ describe('AssetNameValidator', () => {
     });
   });
 });
+
+describe('DePIN owner length on testnet', () => {
+  const base = '&' + 'A'.repeat(119);
+  it('accepts the 120-byte base and 121-byte owner', () => {
+    expect(AssetNameValidator.validateDepin(base, 'xna-test')).to.equal(true);
+    expect(AssetNameValidator.validateOwnerToken(base + '!', 'xna-test')).to.equal(true);
+    expect(() => AssetNameValidator.validateDepin(base + 'A', 'xna-test')).to.throw(InvalidAssetNameError);
+  });
+});

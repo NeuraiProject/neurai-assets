@@ -434,8 +434,8 @@ class UTXOSelector {
    * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
    * @returns {number} Estimated fee in XNA
    */
-  estimateFee(inputs, outputs, feeRate = 0.015) {
-    return rawToDisplayAmount(this.estimateFeeSats(inputs, outputs, feeRate));
+  estimateFee(inputs, outputs, feeRate = 0.015, minPolicyVsize = 0) {
+    return rawToDisplayAmount(this.estimateFeeSats(inputs, outputs, feeRate, minPolicyVsize));
   }
 
   /**
@@ -450,8 +450,11 @@ class UTXOSelector {
    * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
    * @returns {bigint} Estimated fee in satoshis, rounded up
    */
-  estimateFeeSats(inputs, outputs, feeRate = 0.015) {
-    const sizeVbytes = BigInt(this.estimateTransactionSize(inputs, outputs));
+  estimateFeeSats(inputs, outputs, feeRate = 0.015, minPolicyVsize = 0) {
+    if (!Number.isSafeInteger(minPolicyVsize) || minPolicyVsize < 0) {
+      throw new RangeError('minPolicyVsize must be a nonnegative safe integer');
+    }
+    const sizeVbytes = BigInt(Math.max(minPolicyVsize, this.estimateTransactionSize(inputs, outputs)));
     const feeRateSats = xnaAmountToSats(feeRate, { label: 'feeRate', rounding: 'ceil' });
 
     // fee = vbytes / 1000 * feeRate, rounded up to the satoshi

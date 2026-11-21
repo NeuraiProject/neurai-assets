@@ -209,6 +209,7 @@ class AssetQueries {
 
     try {
       const addresses = await this.rpc('listaddressesfortag', [qualifierName]);
+      if (typeof addresses === 'string') throw new Error(addresses);
       return addresses || [];
     } catch (error) {
       if (rpcErrorMessage(error).includes('not found')) {

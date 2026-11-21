@@ -581,6 +581,7 @@ function requireAssetQueries () {
 
 	    try {
 	      const addresses = await this.rpc('listaddressesfortag', [qualifierName]);
+	      if (typeof addresses === 'string') throw new Error(addresses);
 	      return addresses || [];
 	    } catch (error) {
 	      if (rpcErrorMessage(error).includes('not found')) {
@@ -2313,10 +2314,7 @@ function requireDist_1 () {
 	        .replace(/\s+/g, '')
 	        .replace(/#/g, '');
 	}
-	// The node accepts DEPIN names up to 121 chars where DePIN is enabled, but a
-	// 121-char base name yields a 122-char owner token ("&X!") that fails the
-	// global name-length check, making the asset untransferable. Capped at 120
-	// here so every name this library issues keeps a nameable owner token.
+	// Core reserves the last byte of the 121-byte limit for the owner suffix.
 	const DEPIN_MAX_NAME_LENGTH = 120;
 	function isDepinAssetName(assetName) {
 	    const normalized = String(assetName || '').trim();
@@ -2483,6 +2481,8 @@ function requireDist_1 () {
 	    return concatBytes(encodeDestinationScript(address), Uint8Array.of(OP_XNA_ASSET), pushData(encodeReissueAssetPayload(assetName, quantityRaw, units, reissuable, ipfsHash, options)), Uint8Array.of(OP_DROP));
 	}
 	function encodeNullAssetDataPayload(assetName, flag) {
+	    if (!assetName)
+	        throw new Error("A nonempty asset name is required for null asset data");
 	    const nameBytes = asciiBytes(assetName);
 	    return concatBytes(compactSize(nameBytes.length), nameBytes, Uint8Array.of(flag & 0xff));
 	}
@@ -7900,8 +7900,8 @@ function requireUTXOSelector () {
 	   * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
 	   * @returns {number} Estimated fee in XNA
 	   */
-	  estimateFee(inputs, outputs, feeRate = 0.015) {
-	    return rawToDisplayAmount(this.estimateFeeSats(inputs, outputs, feeRate));
+	  estimateFee(inputs, outputs, feeRate = 0.015, minPolicyVsize = 0) {
+	    return rawToDisplayAmount(this.estimateFeeSats(inputs, outputs, feeRate, minPolicyVsize));
 	  }
 
 	  /**
@@ -7916,8 +7916,11 @@ function requireUTXOSelector () {
 	   * @param {number} feeRate - Fee rate in XNA per KB (default: 0.015)
 	   * @returns {bigint} Estimated fee in satoshis, rounded up
 	   */
-	  estimateFeeSats(inputs, outputs, feeRate = 0.015) {
-	    const sizeVbytes = BigInt(this.estimateTransactionSize(inputs, outputs));
+	  estimateFeeSats(inputs, outputs, feeRate = 0.015, minPolicyVsize = 0) {
+	    if (!Number.isSafeInteger(minPolicyVsize) || minPolicyVsize < 0) {
+	      throw new RangeError('minPolicyVsize must be a nonnegative safe integer');
+	    }
+	    const sizeVbytes = BigInt(Math.max(minPolicyVsize, this.estimateTransactionSize(inputs, outputs)));
 	    const feeRateSats = xnaAmountToSats(feeRate, { label: 'feeRate', rounding: 'ceil' });
 
 	    // fee = vbytes / 1000 * feeRate, rounded up to the satoshi
@@ -8606,7 +8609,7 @@ function requireAssetNameValidator () {
 	      throw new InvalidAssetNameError('DEPIN assets are only available in testnet', name);
 	    }
 
-	    ensureMaxLength(name, getMaxAssetNameLength(network || 'xna-test'), 'DEPIN asset name');
+	    ensureMaxLength(name, getRootOrSubMaxLength(network || 'xna-test'), 'DEPIN asset name');
 
 	    if (name !== name.toUpperCase()) {
 	      throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);
@@ -9409,6 +9412,7 @@ function requireBaseAssetTransactionBuilder () {
 	  toProtocolInteger,
 	  sumProtocolIntegers
 	} = requireAssetAmount();
+	const NetworkDetector = requireNetworkDetector();
 	const { prepareOutputsForRpc } = requireRpcAmount();
 
 	/** Outputs below this are dust and are dropped instead of created. */
@@ -9568,7 +9572,7 @@ function requireBaseAssetTransactionBuilder () {
 	  async estimateFee(inputs, outputs) {
 	    this.warmFeeRate();
 	    const feeRate = await this._feeRatePromise;
-	    return this.utxoSelector.estimateFee(inputs, outputs, feeRate);
+	    return this.utxoSelector.estimateFee(inputs, outputs, feeRate, this.params.minPolicyVsize);
 	  }
 
 	  /**
@@ -9599,7 +9603,7 @@ function requireBaseAssetTransactionBuilder () {
 	  async estimateFeeSats(inputs, outputs) {
 	    this.warmFeeRate();
 	    const feeRate = await this._feeRatePromise;
-	    return this.utxoSelector.estimateFeeSats(inputs, outputs, feeRate);
+	    return this.utxoSelector.estimateFeeSats(inputs, outputs, feeRate, this.params.minPolicyVsize);
 	  }
 
 	  /**
@@ -9716,6 +9720,22 @@ function requireBaseAssetTransactionBuilder () {
 	    return getNetworkConfig(this.network).baseNetwork;
 	  }
 
+	  validateAssetDestinations(outputs) {
+	    // Asset destinations use a P2PKH hash or a v1-v3 AuthScript program.
+	    // XNA payments and burns have their own destination rules.
+	    for (const { address, value } of this.getOutputEntries(outputs)) {
+	      if (!value || typeof value !== 'object') continue;
+	      const destinations = [address];
+	      for (const params of Object.values(value)) {
+	        if (!params || typeof params !== 'object') continue;
+	        if (params.addresses) destinations.push(...params.addresses);
+	        if (params.owner_change_address) destinations.push(params.owner_change_address);
+	        if (params.root_change_address) destinations.push(params.root_change_address);
+	      }
+	      NetworkDetector.validateAddressesNetwork(destinations, this.network);
+	    }
+	  }
+
 	  /**
 	   * Build raw transaction using RPC
 	   * @param {Array} inputs - Transaction inputs
@@ -9724,6 +9744,7 @@ function requireBaseAssetTransactionBuilder () {
 	   */
 	  async buildRawTransaction(inputs, outputs) {
 	    try {
+	      this.validateAssetDestinations(outputs);
 	      // Format inputs for createrawtransaction
 	      const formattedInputs = inputs.map(input => ({
 	        txid: input.txid,
@@ -9758,10 +9779,12 @@ function requireBaseAssetTransactionBuilder () {
 	   *
 	   * @param {{operationType: string, params: object}} createTransactionBuild -
 	   *   Canonical payload, as produced by buildCreateTransactionBuild
+	   * @param {Array} outputs - Ordered outputs of the asset operation
 	   * @returns {string} Raw transaction hex, ready for signing
 	   */
-	  buildRawTransactionLocally(createTransactionBuild) {
+	  buildRawTransactionLocally(createTransactionBuild, outputs = []) {
 	    try {
+	      this.validateAssetDestinations(outputs);
 	      return createFromOperation(createTransactionBuild).rawTx;
 	    } catch (error) {
 	      throw new Error(`Failed to create raw transaction locally: ${error.message}`);
@@ -11309,7 +11332,7 @@ function requireReissueBuilder () {
 	        ownerChangeAddress: isDepinAsset ? toAddress : changeAddress
 	      }
 	    );
-	    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
+	    const rawTx = this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs);
 
 	    // 18. Format and return result
 	    const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
@@ -12752,7 +12775,7 @@ function requireReissueRestrictedBuilder () {
 	        verifierString: changeVerifier ? newVerifier : undefined
 	      }
 	    );
-	    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
+	    const rawTx = this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs);
 
 	    // 18. Format and return result
 	    const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];
@@ -13346,7 +13369,7 @@ function requireFreezeAddressBuilder () {
 	    // perfectly well — so the hex comes from the local codec, as reissues
 	    // already do since 1.5.0. Restricted assets keep the usual path.
 	    const rawTx = isDepin
-	      ? this.buildRawTransactionLocally(createTransactionBuild)
+	      ? this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs)
 	      : await this.buildRawTransaction(inputs, orderedOutputs);
 
 	    // 15. Format and return result
@@ -13580,7 +13603,7 @@ function requireDepinSelfRevokeBuilder () {
 
 	    // El `createrawtransaction` del nodo no sabe expresar esta operación, así
 	    // que el hex sale del códec local; el nodo sí acepta el resultado.
-	    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
+	    const rawTx = this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs);
 
 	    return this.formatResult(
 	      rawTx,
@@ -13734,6 +13757,7 @@ function requireNeuraiAssets () {
 	      // NIP-040: documented since 1.4.0 but dropped here until 1.4.1, which
 	      // made the config-level override silently inoperative (per-operation
 	      // params.assetMarker was unaffected).
+	      minPolicyVsize: config.minPolicyVsize,
 	      assetMarker: config.assetMarker,
 	      assetMarkerPolicy: config.assetMarkerPolicy
 	    };
@@ -13760,6 +13784,7 @@ function requireNeuraiAssets () {
 	      ...params,
 	      network: this.config.network,
 	      walletAddresses: this.config.addresses,
+	      minPolicyVsize: this.config.minPolicyVsize,
 	      changeAddress: params.changeAddress || this.config.changeAddress,
 	      toAddress: params.toAddress || this.config.toAddress,
 	      // NIP-040: marker for the localRawBuild metadata. Undefined lets the

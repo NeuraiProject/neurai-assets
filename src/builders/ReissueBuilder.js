@@ -242,7 +242,7 @@ class ReissueBuilder extends BaseAssetTransactionBuilder {
         ownerChangeAddress: isDepinAsset ? toAddress : changeAddress
       }
     );
-    const rawTx = this.buildRawTransactionLocally(createTransactionBuild);
+    const rawTx = this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs);
 
     // 18. Format and return result
     const allUTXOs = [...baseCurrencyUTXOs, ownerTokenUTXO];

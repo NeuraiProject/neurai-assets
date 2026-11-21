@@ -307,7 +307,7 @@ class AssetNameValidator {
       throw new InvalidAssetNameError('DEPIN assets are only available in testnet', name);
     }
 
-    ensureMaxLength(name, getMaxAssetNameLength(network || 'xna-test'), 'DEPIN asset name');
+    ensureMaxLength(name, getRootOrSubMaxLength(network || 'xna-test'), 'DEPIN asset name');
 
     if (name !== name.toUpperCase()) {
       throw new InvalidAssetNameError('DEPIN asset name must be uppercase', name);

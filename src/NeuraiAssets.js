@@ -67,6 +67,7 @@ class NeuraiAssets {
       // NIP-040: documented since 1.4.0 but dropped here until 1.4.1, which
       // made the config-level override silently inoperative (per-operation
       // params.assetMarker was unaffected).
+      minPolicyVsize: config.minPolicyVsize,
       assetMarker: config.assetMarker,
       assetMarkerPolicy: config.assetMarkerPolicy
     };
@@ -93,6 +94,7 @@ class NeuraiAssets {
       ...params,
       network: this.config.network,
       walletAddresses: this.config.addresses,
+      minPolicyVsize: this.config.minPolicyVsize,
       changeAddress: params.changeAddress || this.config.changeAddress,
       toAddress: params.toAddress || this.config.toAddress,
       // NIP-040: marker for the localRawBuild metadata. Undefined lets the

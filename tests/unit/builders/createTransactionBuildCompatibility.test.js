@@ -14,7 +14,7 @@
 const { expect } = require('chai');
 const { createFromOperation } = require('@neuraiproject/neurai-create-transaction');
 const NeuraiAssets = require('../../../src/NeuraiAssets');
-const { ADDR, PQ_ADDR } = require('../../fixtures/addresses');
+const { ADDR, PQ_ADDR, MAINNET } = require('../../fixtures/addresses');
 const { parseUnsignedOutputs, assetPayloads, asciiHex } = require('../../fixtures/txParser');
 const { createAssetRpc } = require('../../fixtures/assetRpc');
 
@@ -376,8 +376,12 @@ describe('network normalization', () => {
       // 'mainnet' is the case that mattered: create-transaction's
       // resolveNetworkFamily treats any unknown label as testnet, so passing
       // the alias through unnormalized would slip past this guard.
-      const result = await assets(wallet(DEPIN_UTXOS), { network })
-        .transferAsset({ assetName: '&SENSOR', recipients: [{ address: ADDR[1], amount: 5 }] });
+      const mainnetWallet = wallet({
+        xnaUtxos: [{ txid: 'a1'.repeat(32), outputIndex: 0, address: MAINNET.legacy, satoshis: 500000 * 1e8 }],
+        ownerUtxos: DEPIN_UTXOS.ownerUtxos.map(utxo => ({ ...utxo, address: MAINNET.legacy }))
+      });
+      const result = await assets(mainnetWallet, { network, addresses: [MAINNET.legacy], changeAddress: MAINNET.legacy })
+        .transferAsset({ assetName: '&SENSOR', recipients: [{ address: MAINNET.ecdsa, amount: 5 }] });
       expect(result.createTransactionBuild.params.network).to.equal('xna');
       expect(() => createFromOperation(result.createTransactionBuild))
         .to.throw(/only available on testnet\/regtest/);

@@ -28,6 +28,7 @@ const {
   toProtocolInteger,
   sumProtocolIntegers
 } = require('../utils/assetAmount');
+const NetworkDetector = require('../utils/networkDetector');
 const { prepareOutputsForRpc } = require('../utils/rpcAmount');
 
 /** Outputs below this are dust and are dropped instead of created. */
@@ -187,7 +188,7 @@ class BaseAssetTransactionBuilder {
   async estimateFee(inputs, outputs) {
     this.warmFeeRate();
     const feeRate = await this._feeRatePromise;
-    return this.utxoSelector.estimateFee(inputs, outputs, feeRate);
+    return this.utxoSelector.estimateFee(inputs, outputs, feeRate, this.params.minPolicyVsize);
   }
 
   /**
@@ -218,7 +219,7 @@ class BaseAssetTransactionBuilder {
   async estimateFeeSats(inputs, outputs) {
     this.warmFeeRate();
     const feeRate = await this._feeRatePromise;
-    return this.utxoSelector.estimateFeeSats(inputs, outputs, feeRate);
+    return this.utxoSelector.estimateFeeSats(inputs, outputs, feeRate, this.params.minPolicyVsize);
   }
 
   /**
@@ -335,6 +336,22 @@ class BaseAssetTransactionBuilder {
     return getNetworkConfig(this.network).baseNetwork;
   }
 
+  validateAssetDestinations(outputs) {
+    // Asset destinations use a P2PKH hash or a v1-v3 AuthScript program.
+    // XNA payments and burns have their own destination rules.
+    for (const { address, value } of this.getOutputEntries(outputs)) {
+      if (!value || typeof value !== 'object') continue;
+      const destinations = [address];
+      for (const params of Object.values(value)) {
+        if (!params || typeof params !== 'object') continue;
+        if (params.addresses) destinations.push(...params.addresses);
+        if (params.owner_change_address) destinations.push(params.owner_change_address);
+        if (params.root_change_address) destinations.push(params.root_change_address);
+      }
+      NetworkDetector.validateAddressesNetwork(destinations, this.network);
+    }
+  }
+
   /**
    * Build raw transaction using RPC
    * @param {Array} inputs - Transaction inputs
@@ -343,6 +360,7 @@ class BaseAssetTransactionBuilder {
    */
   async buildRawTransaction(inputs, outputs) {
     try {
+      this.validateAssetDestinations(outputs);
       // Format inputs for createrawtransaction
       const formattedInputs = inputs.map(input => ({
         txid: input.txid,
@@ -377,10 +395,12 @@ class BaseAssetTransactionBuilder {
    *
    * @param {{operationType: string, params: object}} createTransactionBuild -
    *   Canonical payload, as produced by buildCreateTransactionBuild
+   * @param {Array} outputs - Ordered outputs of the asset operation
    * @returns {string} Raw transaction hex, ready for signing
    */
-  buildRawTransactionLocally(createTransactionBuild) {
+  buildRawTransactionLocally(createTransactionBuild, outputs = []) {
     try {
+      this.validateAssetDestinations(outputs);
       return createFromOperation(createTransactionBuild).rawTx;
     } catch (error) {
       throw new Error(`Failed to create raw transaction locally: ${error.message}`);

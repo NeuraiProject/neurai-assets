@@ -262,7 +262,7 @@ class FreezeAddressBuilder extends BaseAssetTransactionBuilder {
     // perfectly well — so the hex comes from the local codec, as reissues
     // already do since 1.5.0. Restricted assets keep the usual path.
     const rawTx = isDepin
-      ? this.buildRawTransactionLocally(createTransactionBuild)
+      ? this.buildRawTransactionLocally(createTransactionBuild, orderedOutputs)
       : await this.buildRawTransaction(inputs, orderedOutputs);
 
     // 15. Format and return result
